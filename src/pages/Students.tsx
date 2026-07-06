@@ -515,7 +515,7 @@ export function StudentsPage() {
           <Filter className="size-4 text-black/40" />
           <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium">
             <option value="all">All classes</option>
-            {classes.map((c) => <option key={c.id} value={c.id}>{c.className}</option>)}
+            {classes.map((c) => <option key={c.id} value={c.id}>{c.className + " " + c.department}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-2 text-sm">
