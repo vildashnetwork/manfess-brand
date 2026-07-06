@@ -601,11 +601,11 @@ function SubjectDialog({
                 type="button"
                 onClick={() => toggleClass(c.id)}
                 className={`text-xs px-3 py-1.5 rounded-full font-bold border ${form.classIds.includes(c.id)
-                    ? "bg-brand text-white border-brand"
-                    : "border-stone-200 text-black/60 hover:bg-stone-50"
+                  ? "bg-brand text-white border-brand"
+                  : "border-stone-200 text-black/60 hover:bg-stone-50"
                   }`}
               >
-                {c.className}
+                {c.className + " " + c.department}
               </button>
             ))}
             {classes.length === 0 && (
@@ -623,8 +623,8 @@ function SubjectDialog({
                 type="button"
                 onClick={() => toggleTeacher(t.id)}
                 className={`text-xs px-3 py-1.5 rounded-full font-bold border ${form.teacherIds.includes(t.id)
-                    ? "bg-brand text-white border-brand"
-                    : "border-stone-200 text-black/60 hover:bg-stone-50"
+                  ? "bg-brand text-white border-brand"
+                  : "border-stone-200 text-black/60 hover:bg-stone-50"
                   }`}
               >
                 {t.fullName}

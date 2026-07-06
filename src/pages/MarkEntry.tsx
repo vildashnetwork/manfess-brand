@@ -622,7 +622,7 @@ export function MarkEntry() {
           label="Class"
           value={classId}
           onChange={setClassId}
-          options={allowedClasses.map((c) => ({ value: c.id, label: c.className }))}
+          options={allowedClasses.map((c) => ({ value: c.id, label: c.className + " " + c?.department }))}
         />
         <Select
           label="Subject"
@@ -730,8 +730,8 @@ export function MarkEntry() {
                       {g && (
                         <span
                           className={`inline-grid place-items-center size-6 sm:size-7 rounded-full font-bold text-[10px] sm:text-xs ${g.grade === "F"
-                              ? "bg-red-100 text-red-700"
-                              : "bg-brand/10 text-brand"
+                            ? "bg-red-100 text-red-700"
+                            : "bg-brand/10 text-brand"
                             }`}
                         >
                           {g.grade}
