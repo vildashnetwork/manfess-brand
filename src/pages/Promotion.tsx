@@ -587,7 +587,7 @@ export function PromotionPage() {
         >
           <option value="">Select Class</option>
           {filteredClasses.map((c) => (
-            <option key={c.id} value={c.id}>{c.className}</option>
+            <option key={c.id} value={c.id}>{c.className + " " + c.department}</option>
           ))}
         </select>
 
@@ -625,8 +625,8 @@ export function PromotionPage() {
                   <div key={s.student.id} className="flex items-center justify-between p-3 bg-brand/5 rounded-xl border border-brand/20">
                     <div className="flex items-center gap-3">
                       <div className={`size-8 rounded-full grid place-items-center font-bold text-sm ${i === 0 ? "bg-yellow-400 text-black" :
-                          i === 1 ? "bg-gray-300 text-black" :
-                            "bg-amber-600 text-white"
+                        i === 1 ? "bg-gray-300 text-black" :
+                          "bg-amber-600 text-white"
                         }`}>
                         {i + 1}
                       </div>
@@ -723,8 +723,8 @@ export function PromotionPage() {
                       <td className="px-5 py-3 font-display font-bold text-brand">{s.overallAverage.toFixed(2)}</td>
                       <td className="px-5 py-3">
                         <span className={`text-xs px-2 py-1 rounded-full font-bold ${s.grade === "A" || s.grade === "B" ? "bg-green-100 text-green-700" :
-                            s.grade === "C" || s.grade === "D" ? "bg-yellow-100 text-yellow-700" :
-                              "bg-red-100 text-red-700"
+                          s.grade === "C" || s.grade === "D" ? "bg-yellow-100 text-yellow-700" :
+                            "bg-red-100 text-red-700"
                           }`}>
                           {s.grade}
                         </span>

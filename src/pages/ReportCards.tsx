@@ -1879,7 +1879,7 @@ export function ReportCardsIndex() {
         >
           <option value="">Select Class</option>
           {allowedClasses.map((c) => (
-            <option key={c.id} value={c.id}>{c.className}</option>
+            <option key={c.id} value={c.id}>{c.className + " " + c.department}</option>
           ))}
         </select>
 
