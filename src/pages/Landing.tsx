@@ -7,7 +7,7 @@ export function Landing() {
 
   useEffect(() => {
     if (user) {
-      window.location.href = "/app/classes"
+      window.location.href = "/app/mark-entry"
     }
   },[ user])
 
