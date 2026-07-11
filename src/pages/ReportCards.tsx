@@ -615,13 +615,13 @@ export function ReportCardsIndex() {
     const avg = data.overallAverage;
     const gradeInfo = gradeFor(avg);
     const statusPass = avg >= 10;
-    const statusText = statusPass ? "Admis(e)" : "Redouble";
+    const statusText = statusPass ? "Passed" : "Failed";
     const displayCols = ctx.displayColumns;
     const isThirdTerm = ctx.isThirdTerm;
 
     // Build sequence headers using display columns
     const seqHeaders = displayCols.map((col) =>
-      `<th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">${col}</th>`
+      `<th style="padding:5px 6px;border:1px solid #000000;font-weight:bold;text-align:center;font-size:10px;">${col}</th>`
     ).join("");
 
     // Build rows with sequence scores
@@ -633,83 +633,83 @@ export function ReportCardsIndex() {
           // For Third Term, use the term averages stored in sequenceScores
           seqCells = displayCols.map((col) => {
             const score = sub.sequenceScores?.[col];
-            return `<td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${score !== null && score !== undefined ? Number(score).toFixed(2) : "-"}</td>`;
+            return `<td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${score !== null && score !== undefined ? Number(score).toFixed(2) : "-"}</td>`;
           }).join("");
         } else {
           // For other terms, use sequence scores
           seqCells = ctx.sequences.map((seq) => {
             const score = sub.sequenceScores?.[seq];
-            return `<td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${score !== null && score !== undefined ? Number(score).toFixed(2) : "-"}</td>`;
+            return `<td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${score !== null && score !== undefined ? Number(score).toFixed(2) : "-"}</td>`;
           }).join("");
         }
 
         return `
           <tr>
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:left;font-weight:600;font-size:10px;">${sub.name}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:left;font-weight:600;font-size:10px;">${sub.name}</td>
             ${seqCells}
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${sub.average > 0 ? sub.average.toFixed(2) : "-"}</td>
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${sub.coefficient}</td>
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-weight:bold;font-size:9.5px;">${sub.average > 0 ? sub.weightedTotal.toFixed(2) : "-"}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.average > 0 ? sub.average.toFixed(2) : "-"}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.coefficient}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.average > 0 ? sub.weightedTotal.toFixed(2) : "-"}</td>
             
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-weight:bold;font-size:9.5px;">${sub.grade}</td>
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${sub.remark}</td>
-            <td style="padding:5px 6px;border:1px solid #d6d3d1;text-align:center;font-size:9.5px;">${sub.teacher || "—"}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.grade}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.remark}</td>
+            <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.teacher || "—"}</td>
           </tr>`;
       })
       .join("");
 
     // Build total row with sequence columns
-    const totalSeqCells = displayCols.map(() => `<td style="padding:5px 6px;border:1px solid #121212;text-align:center;">-</td>`).join("");
+    const totalSeqCells = displayCols.map(() => `<td style="padding:5px 6px;border:1px solid #000000;text-align:center;">-</td>`).join("");
 
     return `
       <div style="font-family:'Segoe UI',Arial,sans-serif;color:#121212;max-width:1000px;margin:0 auto;">
-        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding-bottom:14px;border-bottom:2px solid #121212;">
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding-bottom:14px;border-bottom:2px solid #000000;">
           <div style="text-align:left;line-height:1.5;">
             République du Cameroun<br/>
-            <span style="font-weight:400;font-style:italic;text-transform:none;">Paix — Travail — Patrie</span><br/>
+            <span style="font-weight:600;font-style:italic;text-transform:none;">Paix — Travail — Patrie</span><br/>
             Ministère des Enseignements Secondaires
           </div>
           <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-            <div style="width:46px;height:46px;border-radius:12px;background:#16a34a;display:flex;align-items:center;justify-content:center;margin-bottom:2px;">
+            <div style="width:46px;height:46px;border-radius:12px;background:#000000;display:flex;align-items:center;justify-content:center;margin-bottom:2px;">
               <svg viewBox="0 0 24 24" width="24" height="24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 1 8.5 12 14l8-4.09V17h1.5V8.5L12 3Zm0 8.9L4.5 8.5 12 4.9l7.5 3.6L12 11.9Z"/><path d="M6 12.18v3.7c0 1.9 2.69 3.62 6 3.62s6-1.72 6-3.62v-3.7l-6 2.9-6-2.9Z"/></svg>
             </div>
             <div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;text-transform:none;">MANFESS EVENING SCHOOL</div>
-            <div style="font-size:8.5px;color:#78716c;font-weight:400;text-transform:none;">P.O. Box 1234, Yaoundé · MINESEC accredited</div>
+            <div style="font-size:8.5px;color:#000000;font-weight:600;text-transform:none;">P.O. Box 1234, Yaoundé · MINESEC accredited</div>
           </div>
           <div style="text-align:right;line-height:1.5;">
             Republic of Cameroon<br/>
-            <span style="font-weight:400;font-style:italic;text-transform:none;">Peace — Work — Fatherland</span><br/>
+            <span style="font-weight:600;font-style:italic;text-transform:none;">Peace — Work — Fatherland</span><br/>
             Ministry of Secondary Education
           </div>
         </div>
 
         <div style="text-align:center;margin:16px 0;">
-          <span style="display:inline-block;background:#121212;color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;padding:7px 22px;border-radius:999px;">${ctx.title} · Academic Year ${ctx.academicYear}</span>
+          <span style="display:inline-block;background:#000000;color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;padding:7px 22px;border-radius:999px;">${ctx.title} · Academic Year ${ctx.academicYear}</span>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;margin-bottom:16px;">
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Student</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.fullName}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Admission №</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.admissionNumber || "N/A"}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Class</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.selectedClass?.className || ""}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Section</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.department}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Sex</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.gender === "male" ? "Male" : "Female"}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Date of Birth</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.dob}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Class Size</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.classSize}</div></div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Position</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Student</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.fullName}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Admission №</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.admissionNumber || "N/A"}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Class</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.selectedClass?.className || ""}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Section</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.department}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Sex</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.gender === "male" ? "Male" : "Female"}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Date of Birth</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.dob}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Class Size</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.classSize}</div></div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Position</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div></div>
         </div>
 
         <table style="width:100%;border-collapse:collapse;font-size:10px;border:1px solid #121212;margin-bottom:16px;">
           <thead>
-            <tr style="background:#121212;color:#fff;">
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Discipline / Subject</th>
+            <tr style="background:#000000;color:#fff;">
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Discipline / Subject</th>
               ${seqHeaders}
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Avg</th>
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Coef</th>
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Total</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Avg</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Coef</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Total</th>
           
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Grade</th>
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Appreciation</th>
-              <th style="padding:5px 6px;border:1px solid #121212;font-weight:700;text-align:center;font-size:10px;">Enseignant</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Grade</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Remark</th>
+              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Teacher</th>
             </tr>
           </thead>
           <tbody>
@@ -717,62 +717,59 @@ export function ReportCardsIndex() {
           </tbody>
           <tfoot>
             <tr style="background:rgba(18,18,18,0.05);font-weight:700;">
-              <td style="padding:5px 6px;border:1px solid #121212;text-align:left;font-size:10px;">TOTAL</td>
+              <td style="padding:5px 6px;border:1px solid #000000;text-align:left;font-size:10px;">TOTAL</td>
               ${totalSeqCells}
-              <td style="padding:5px 6px;border:1px solid #121212;text-align:center;font-size:10px;">-</td>
-              <td style="padding:5px 6px;border:1px solid #121212;text-align:center;font-size:10px;">${data.totalCoeff || 0}</td>
-              <td style="padding:5px 6px;border:1px solid #121212;text-align:center;font-size:10px;">${data.totalWeighted > 0 ? data.totalWeighted.toFixed(2) : "-"}</td>
-              <td colspan="6" style="padding:5px 6px;border:1px solid #121212;"></td>
+              <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-size:10px;">-</td>
+              <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-size:10px;">${data.totalCoeff || 0}</td>
+              <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-size:10px;">${data.totalWeighted > 0 ? data.totalWeighted.toFixed(2) : "-"}</td>
+              <td colspan="6" style="padding:5px 6px;border:1px solid #000000;"></td>
             </tr>
           </tfoot>
         </table>
 
         <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px;">
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:8px 10px;background:rgba(22,163,74,0.06);border-color:rgba(22,163,74,0.3);">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Moyenne / 20</div>
-            <div style="font-size:15px;font-weight:800;margin-top:2px;color:#16a34a;">${avg.toFixed(2)}</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:8px 10px;background:rgba(22,163,74,0.06);">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Average / 20</div>
+            <div style="font-size:15px;font-weight:800;margin-top:2px;color:#000000;">${avg.toFixed(2)}</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:8px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Moy. Classe</div>
-            <div style="font-size:15px;font-weight:800;margin-top:2px;">${ctx.classAvg.toFixed(2)}</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:8px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Class Average</div>
+            <div style="font-size:15px;font-weight:800;margin-top:2px;color:#000000;">${ctx.classAvg.toFixed(2)}</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:8px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Rang</div>
-            <div style="font-size:15px;font-weight:800;margin-top:2px;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:8px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Position</div>
+            <div style="font-size:15px;font-weight:800;margin-top:2px;color:#000000;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:8px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Mention</div>
-            <div style="font-size:15px;font-weight:800;margin-top:2px;">${gradeInfo.remark}</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:8px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Remark</div>
+            <div style="font-size:15px;font-weight:800;margin-top:2px;color:#000000;">${gradeInfo.remark}</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:8px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Décision</div>
-            <div style="font-size:15px;font-weight:800;margin-top:2px;color:${statusPass ? '#16a34a' : '#dc2626'};">${statusText}</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:8px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Decision</div>
+            <div style="font-size:15px;font-weight:800;margin-top:2px;color:${statusPass ? '#020c05' : '#0c0101'};">${statusText}</div>
           </div>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;font-size:11px;">
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Conduite</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">Bonne</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Conduct</div>
+            <div style="font-size:12px;font-weight:600;margin-top:2px;">Good</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Discipline</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">Satisfaisante</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Discipline</div>
+            <div style="font-size:12px;font-weight:600;margin-top:2px;">Satisfied</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Absences (h)</div>
+          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Absences (h)</div>
             <div style="font-size:12px;font-weight:600;margin-top:2px;">0</div>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;">Retards</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">0</div>
-          </div>
+
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;">
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:10px 12px;font-size:11px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;margin-bottom:4px;">Class Master's Remark</div>
-            <p style="font-style:italic;color:#44403c;margin:0;font-size:11px;">
+          <div style="border:1px solid #000000;border-radius:8px;padding:10px 12px;font-size:11px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;margin-bottom:4px;">Class Master's Remark</div>
+            <p style="font-style:italic;color:#000000;margin:0;font-size:11px;font-weight:bold;">
               ${avg >= 16 ? "Excellent performance. A role model to others." :
         avg >= 14 ? "Very good performance. Keep pushing." :
           avg >= 12 ? "Good performance. Can do better." :
@@ -780,9 +777,9 @@ export function ReportCardsIndex() {
               "Needs serious improvement. Must work harder."}
             </p>
           </div>
-          <div style="border:1px solid #d6d3d1;border-radius:8px;padding:10px 12px;font-size:11px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#78716c;margin-bottom:4px;">Principal's Remark</div>
-            <p style="font-style:italic;color:#44403c;margin:0;font-size:11px;">
+          <div style="border:1px solid #000000;border-radius:8px;padding:10px 12px;font-size:11px;">
+            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;margin-bottom:4px;">Principal's Remark</div>
+            <p style="font-style:italic;color:#000000;margin:0;font-size:11px;font-weight:bold;">
               ${avg >= 16 ? "Outstanding. A pride to the school." :
         avg >= 14 ? "Commendable effort. Continue to excel." :
           avg >= 12 ? "Satisfactory. Keep up the momentum." :
@@ -793,14 +790,14 @@ export function ReportCardsIndex() {
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;text-align:center;font-size:11px;margin-bottom:18px;">
-          <div><div style="height:34px;border-bottom:1px dashed #a8a29e;"></div><div style="margin-top:4px;font-weight:600;color:#44403c;">Class Master</div></div>
-          <div><div style="height:34px;border-bottom:1px dashed #a8a29e;"></div><div style="margin-top:4px;font-weight:600;color:#44403c;">Principal</div></div>
-          <div><div style="height:34px;border-bottom:1px dashed #a8a29e;"></div><div style="margin-top:4px;font-weight:600;color:#44403c;">Parent / Guardian</div></div>
+          <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Class Master</div></div>
+          <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Principal</div></div>
+          <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Parent / Guardian</div></div>
         </div>
 
-        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #d6d3d1;padding-top:8px;font-size:8.5px;color:#a8a29e;">
-          <div>Issued by MAMS · MANFESS Evening School · ${new Date().toLocaleDateString()}</div>
-          <div style="font-family:monospace;">VERIF#${data.student.id.toUpperCase()}-${ctx.termId.toUpperCase()}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #000000;padding-top:8px;font-size:8.5px;color:#000000;">
+          <div style="font-size:8.5px;color:#000000; font-weight:bold;">Issued by MAMS · MANFESS Evening School · ${new Date().toLocaleDateString()}</div>
+          <div style="font-family:monospace; color:#000000; font-weight:bold;">VERIF#${data.student.id.toUpperCase()}-${ctx.termId.toUpperCase()}</div>
         </div>
       </div>
     `;
