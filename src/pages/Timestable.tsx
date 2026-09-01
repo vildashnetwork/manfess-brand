@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import axios from "axios";
 import html2canvas from "html2canvas-pro";
 
-const API_BASE = "https://belmon-backend-t71t.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL;
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 const CYCLE_RATES = { first: 500, second: 700 } as const;
 
@@ -778,7 +778,7 @@ export function TimetableAdminPage() {
     }
   }, [applyMockDataFallback]);
 
-    useEffect(() => {
+  useEffect(() => {
     fetchAllData();
   }, [fetchAllData]);
 
@@ -1971,7 +1971,7 @@ export function TimetableAdminPage() {
           >
             <Upload className="size-4" /> Bulk Add
           </button>
-                    <button
+          <button
             onClick={() => setShowCopyModal(true)}
             disabled={isSaving}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all disabled:opacity-50"
@@ -2227,7 +2227,7 @@ export function TimetableAdminPage() {
         />
       )}
 
-            {showCopyModal && (
+      {showCopyModal && (
         <CopyYearModal currentYear={academicYear} onCopy={handleCopyFromPrevious} onCancel={() => setShowCopyModal(false)} />
       )}
 
@@ -2517,9 +2517,9 @@ export function SetupWizard({
           (Array.isArray(t.availableDays) && t.availableDays.length > 0);
         next[t._id] = hasConfig
           ? {
-              isPermanent: !!t.isPermanent,
-              availableDays: t.isPermanent ? [...DAYS] : [...(t.availableDays || [])],
-            }
+            isPermanent: !!t.isPermanent,
+            availableDays: t.isPermanent ? [...DAYS] : [...(t.availableDays || [])],
+          }
           : { isPermanent: true, availableDays: [...DAYS] };
       });
       return next;
@@ -2541,7 +2541,7 @@ export function SetupWizard({
       if (!(s < brkE && e > brkS)) { count += 1; periodNum += 1; }
       cursor = e;
     }
-        return count;
+    return count;
   }, [settings]);
 
   // ---- Save handlers ----
@@ -2576,7 +2576,7 @@ export function SetupWizard({
 
   const handleSaveSettings = async () => {
     setSaving(true);
-        const ok = await onSaveSchoolSettings({
+    const ok = await onSaveSchoolSettings({
       schoolStartTime: settings.schoolStartTime,
       schoolEndTime: settings.schoolEndTime,
       breakStart: settings.breakStart,
@@ -2612,11 +2612,10 @@ export function SetupWizard({
               key={tab}
               onClick={() => tab !== "teachers" && setActiveTab(tab)}
               disabled={tab === "teachers" ? false : activeTab === "teachers"}
-              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${
-                activeTab === tab
+              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${activeTab === tab
                   ? "border-brand text-brand"
                   : "border-transparent text-black/40 hover:text-black cursor-pointer"
-              }`}
+                }`}
             >
               {tab === "teachers" ? "Teacher Availability" : tab === "schedule" ? "School Schedule" : "Generate"}
             </button>
@@ -2669,7 +2668,7 @@ export function SetupWizard({
           </button>
         </div>
       </div>
-        </div>
+    </div>
   );
 }
 
@@ -2772,9 +2771,8 @@ function TeacherAvailabilityTab({
                         type="button"
                         onClick={() => !isPerm && toggleDay(teacher._id, day)}
                         disabled={isPerm}
-                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${
-                          checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 cursor-pointer hover:bg-stone-200"
-                        }`}
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 cursor-pointer hover:bg-stone-200"
+                          }`}
                       >
                         {day.slice(0, 3)}
                       </button>
@@ -2863,9 +2861,8 @@ function ScheduleSettingsTab({
                       : [...settings.schoolDays, day];
                     set("schoolDays", newDays);
                   }}
-                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${
-                    checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"
-                  }`}>
+                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"
+                    }`}>
                   {day.slice(0, 3)}
                 </button>
               );

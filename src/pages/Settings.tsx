@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import { Shield, Database, Plus, Pencil, Trash2, Search, X, Users, UserCog, Loader2 } from "lucide-react";
 import axios from "axios";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api/users";
+const API_BASE = import.meta.env.VITE_API_URL + "/users"
+// ?? "https://manfess-back.onrender.com/api/users";
 
 interface User {
   id: string;
