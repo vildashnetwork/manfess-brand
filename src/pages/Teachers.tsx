@@ -731,7 +731,8 @@ import { Mail, Phone, BookOpen, Plus, Pencil, Trash2, Search, X } from "lucide-r
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api/users";
+const API_BASE = import.meta.env.VITE_API_URL + "/users"
+//  ?? "https://manfess-back.onrender.com/api/users";
 
 // Types
 interface Teacher {
