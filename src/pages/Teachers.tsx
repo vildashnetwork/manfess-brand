@@ -731,7 +731,7 @@ import { Mail, Phone, BookOpen, Plus, Pencil, Trash2, Search, X } from "lucide-r
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = "https://manfess-back.onrender.com/api/users";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api/users";
 
 // Types
 interface Teacher {
@@ -770,7 +770,7 @@ export function TeachersPage() {
   const [showNew, setShowNew] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
-  const role = "admin";
+  const role: string = "admin";
   const canEdit = role === "super_admin" || role === "admin";
 
   const isDatabaseId = (id: string) => {

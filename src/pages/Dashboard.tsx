@@ -134,7 +134,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import { currentUser } from "@/lib/auth";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 interface Student {
   id: string;

@@ -1,15 +1,30 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { 
-  Calendar, Clock, Users, Plus, Pencil, Trash2, Search, X, 
-  DollarSign, CalendarDays, User, BookOpen, Download, Printer, 
-  Eye, Filter, ChevronLeft, ChevronRight, Grid, List, 
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
+import {
+  Calendar, Clock, Users, Plus, Pencil, Trash2, Search, X,
+  CalendarDays, User, BookOpen, Printer, Download,
+  Filter, ChevronLeft, ChevronRight, Grid, List,
   AlertCircle, Check, Copy, RefreshCw, Upload, FileSpreadsheet,
-  Settings, Bell, Menu, Sun, Moon, LogOut, Home, Layout
+  Eye, EyeOff, LayoutGrid, Table as TableIcon, User as UserIcon,
+  School, ChevronDown
 } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
+import html2canvas from "html2canvas-pro";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = "https://belmon-backend-t71t.onrender.com/api";
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+const CYCLE_RATES = { first: 500, second: 700 } as const;
+
+// Real period schedule used for the PDF grid layout and matrix
+const PDF_SCHEDULE = [
+  { type: "period" as const, label: "1", start: "08:00", end: "08:45" },
+  { type: "period" as const, label: "2", start: "08:45", end: "09:30" },
+  { type: "period" as const, label: "3", start: "09:30", end: "10:15" },
+  { type: "break" as const, label: "BREAK TIME", start: "10:15", end: "10:30" },
+  { type: "period" as const, label: "4", start: "10:30", end: "11:15" },
+  { type: "period" as const, label: "5", start: "11:15", end: "12:00" },
+];
+const PDF_GRID_DAYS = DAYS.slice(0, 5);
 
 // ============================================
 // TYPES
@@ -39,11 +54,14 @@ interface TimetableEntry {
 interface Teacher {
   _id: string;
   name: string;
+  fullName?: string;
   email: string;
   phone: string;
   qualification: string;
   subjectIds: string[];
   classIds: string[];
+  isPermanent?: boolean;
+  availableDays?: string[];
 }
 
 interface Class {
@@ -51,6 +69,7 @@ interface Class {
   className: string;
   department?: string;
   cycle?: string;
+  displayName?: string;
 }
 
 interface Subject {
@@ -58,6 +77,21 @@ interface Subject {
   name: string;
   code: string;
   department?: string;
+  periodsPerWeek?: number;
+  // Returned by GET /api/subjects — used by the generator readiness check.
+  classIds?: string[];
+  teacherIds?: string[];
+}
+
+interface SchoolSettings {
+  _id?: string;
+  schoolStartTime: string;
+  schoolEndTime: string;
+  breakStart: string;
+  breakEnd: string;
+  periodDurationMinutes: number;
+  schoolDays: string[];
+  periodsPerDay: number;
 }
 
 interface TimetableStats {
@@ -68,6 +102,535 @@ interface TimetableStats {
   firstCyclePeriods: number;
   secondCyclePeriods: number;
 }
+
+interface PdfGridCell {
+  subjectName: string;
+  teacherName: string;
+  room?: string;
+}
+
+interface PdfGridRow {
+  day: string;
+  period: string;
+  duration: string;
+  isBreak: boolean;
+  cells: Record<string, PdfGridCell | null>;
+}
+
+// ============================================
+// TIME SANITIZATION HELPERS
+// ============================================
+
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+
+// Matches real MongoDB ObjectIds — used to exclude mock/demo teacher IDs (e.g. "t1").
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+
+function isValidTimeString(t: any): t is string {
+  return typeof t === "string" && TIME_RE.test(t);
+}
+
+function addOneHourCapped(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  const endHour = Math.min(h + 1, 23);
+  return `${String(endHour).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function sanitizeTimes(startTimeRaw: any, endTimeRaw: any): { startTime: string; endTime: string } {
+  const startTime = isValidTimeString(startTimeRaw) ? startTimeRaw : "08:00";
+  const endCandidate = isValidTimeString(endTimeRaw) ? endTimeRaw : null;
+  const isPlaceholder = endCandidate === null || endCandidate === "00:00";
+
+  const endTime = isPlaceholder ? addOneHourCapped(startTime) : endCandidate!;
+  return { startTime, endTime };
+}
+
+function sanitizeEntry(entry: TimetableEntry): TimetableEntry {
+  const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
+  return { ...entry, startTime, endTime };
+}
+
+// ============================================
+// MODULE-LEVEL HELPERS
+// ============================================
+
+function saveToLocalStorage(key: string, data: any) {
+  try {
+    localStorage.setItem(`timetable_${key}`, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error saving to localStorage:", error);
+  }
+}
+
+function loadFromLocalStorage(key: string) {
+  try {
+    const data = localStorage.getItem(`timetable_${key}`);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error("Error loading from localStorage:", error);
+    return null;
+  }
+}
+
+function mapApiEntry(entry: any): TimetableEntry {
+  const teacherObj = entry.teacherId || {};
+  const classObj = entry.classId || {};
+  const subjectObj = entry.subjectId || {};
+
+  const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
+
+  return {
+    id: entry._id || entry.id || `temp_${Date.now()}`,
+    _id: entry._id || entry.id,
+    teacherId: teacherObj._id || entry.teacherId || "",
+    teacherName: teacherObj.name || entry.teacherName || "Unknown",
+    classId: classObj._id || entry.classId || "",
+    className: classObj.className || entry.className || "Unknown",
+    subjectId: subjectObj._id || entry.subjectId || "",
+    subjectName: subjectObj.name || entry.subjectName || "Unknown",
+    subjectCode: subjectObj.code || entry.subjectCode || "",
+    day: entry.day || "",
+    startTime,
+    endTime,
+    periodNumber: entry.periodNumber || 1,
+    cycle: entry.cycle || "first",
+    ratePerPeriod: entry.ratePerPeriod || CYCLE_RATES.first,
+    room: entry.room || "",
+    academicYear: entry.academicYear || "2026-2027",
+    isActive: entry.isActive !== undefined ? entry.isActive : true,
+  };
+}
+
+function mapForApi(entry: TimetableEntry) {
+  const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
+  return {
+    teacherId: entry.teacherId,
+    classId: entry.classId,
+    subjectId: entry.subjectId,
+    day: entry.day,
+    startTime,
+    endTime,
+    periodNumber: entry.periodNumber || 1,
+    cycle: entry.cycle || 'first',
+    ratePerPeriod: entry.ratePerPeriod || CYCLE_RATES[entry.cycle || 'first'],
+    room: entry.room || '',
+    academicYear: entry.academicYear || '2026-2027',
+    isActive: entry.isActive !== undefined ? entry.isActive : true,
+  };
+}
+
+function mergeBulkApiResults(
+  baseEntries: TimetableEntry[],
+  submittedEntries: TimetableEntry[],
+  apiEntries?: any[]
+): TimetableEntry[] {
+  if (!apiEntries) return [...baseEntries, ...submittedEntries];
+
+  const merged = [...baseEntries];
+  submittedEntries.forEach((entry, index) => {
+    const apiEntry = apiEntries[index];
+    merged.push(apiEntry?._id ? { ...entry, _id: apiEntry._id, id: apiEntry._id } : entry);
+  });
+  return merged;
+}
+
+function calculateStats(entries: TimetableEntry[]): TimetableStats {
+  const firstCycle = entries.filter((e) => e.cycle === "first").length;
+  const secondCycle = entries.filter((e) => e.cycle === "second").length;
+  const totalPotential = entries.reduce((sum, e) => sum + e.ratePerPeriod, 0);
+
+  return {
+    totalPeriods: entries.length,
+    totalTeachers: new Set(entries.map((e) => e.teacherId)).size,
+    totalClasses: new Set(entries.map((e) => e.classId)).size,
+    totalPotential,
+    firstCyclePeriods: firstCycle,
+    secondCyclePeriods: secondCycle,
+  };
+}
+
+function csvField(value: string | number | undefined | null): string {
+  const str = String(value ?? "");
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function normalizeColor(color: string): string {
+  try {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return color;
+    ctx.fillStyle = color;
+    return ctx.fillStyle;
+  } catch {
+    return color;
+  }
+}
+
+function flattenUnsupportedColors(root: HTMLElement) {
+  const props = ["color", "backgroundColor", "borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor"] as const;
+  const all = root.querySelectorAll<HTMLElement>("*");
+  [root, ...Array.from(all)].forEach((el) => {
+    const computed = window.getComputedStyle(el);
+    props.forEach((prop) => {
+      const value = computed[prop];
+      if (value && (value.includes("oklch") || value.includes("lab(") || value.includes("color("))) {
+        el.style[prop] = normalizeColor(value);
+      }
+    });
+  });
+}
+
+// ============================================
+// MULTI-SUBJECT HELPERS
+// ============================================
+
+function groupEntriesByClassAndTime(entries: TimetableEntry[]): Map<string, TimetableEntry[]> {
+  const grouped = new Map<string, TimetableEntry[]>();
+
+  entries.forEach(entry => {
+    const key = `${entry.classId}|${entry.day}|${entry.startTime}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key)!.push(entry);
+  });
+
+  return grouped;
+}
+
+function combineMultiSubjectEntries(entries: TimetableEntry[]): TimetableEntry[] {
+  const grouped = groupEntriesByClassAndTime(entries);
+  const combined: TimetableEntry[] = [];
+
+  grouped.forEach((group) => {
+    if (group.length === 1) {
+      combined.push(group[0]);
+    } else {
+      const first = group[0];
+      const subjectNames = group.map(e => e.subjectName).join('/');
+      const teacherNames = group.map(e => e.teacherName).join('/');
+      const subjectCodes = group.map(e => e.subjectCode || '').filter(Boolean).join('/');
+
+      combined.push({
+        ...first,
+        subjectName: subjectNames,
+        subjectCode: subjectCodes || undefined,
+        teacherName: teacherNames,
+        room: group.every(e => e.room === group[0].room) ? group[0].room : group.map(e => e.room || '?').join('/'),
+        id: first.id,
+        _id: first._id,
+      });
+    }
+  });
+
+  return combined;
+}
+
+function buildPdfGrid(entries: TimetableEntry[], classList: Class[]): PdfGridRow[] {
+  const combinedEntries = combineMultiSubjectEntries(entries);
+  const classNames = classList.map((c) => c.className);
+
+  const index = new Map<string, TimetableEntry>();
+  combinedEntries.forEach((e) => {
+    index.set(`${e.day}|${e.startTime}|${e.className}`, e);
+  });
+
+  const rows: PdfGridRow[] = [];
+  PDF_GRID_DAYS.forEach((day) => {
+    PDF_SCHEDULE.forEach((slot) => {
+      if (slot.type === "break") {
+        rows.push({ day, period: "", duration: `${slot.start} - ${slot.end}`, isBreak: true, cells: {} });
+        return;
+      }
+      const cells: Record<string, PdfGridCell | null> = {};
+      classNames.forEach((cls) => {
+        const entry = index.get(`${day}|${slot.start}|${cls}`);
+        cells[cls] = entry ? {
+          subjectName: entry.subjectName,
+          teacherName: entry.teacherName,
+          room: entry.room
+        } : null;
+      });
+      rows.push({ day, period: slot.label, duration: `${slot.start} - ${slot.end}`, isBreak: false, cells });
+    });
+  });
+
+  return rows;
+}
+
+function buildPaginatedPdfGrids(entries: TimetableEntry[], classList: Class[]): PdfGridRow[][] {
+  const combinedEntries = combineMultiSubjectEntries(entries);
+
+  const uniqueClassNames = new Set<string>();
+  combinedEntries.forEach(e => {
+    const className = e.className || 'Unknown';
+    uniqueClassNames.add(className);
+  });
+
+  const classNames = Array.from(uniqueClassNames).sort();
+
+  const index = new Map<string, TimetableEntry>();
+  combinedEntries.forEach((e) => {
+    const key = `${e.day}|${e.startTime}|${e.className}`;
+    index.set(key, e);
+  });
+
+  const pageGroups = [
+    { days: ["Monday", "Tuesday", "Wednesday"], label: "Mon-Wed" },
+    { days: ["Thursday", "Friday"], label: "Thu-Fri" },
+  ];
+
+  return pageGroups.map((group) => {
+    const rows: PdfGridRow[] = [];
+    group.days.forEach((day) => {
+      PDF_SCHEDULE.forEach((slot) => {
+        if (slot.type === "break") {
+          rows.push({
+            day,
+            period: "",
+            duration: `${slot.start} - ${slot.end}`,
+            isBreak: true,
+            cells: {}
+          });
+          return;
+        }
+        const cells: Record<string, PdfGridCell | null> = {};
+        classNames.forEach((cls) => {
+          const entry = index.get(`${day}|${slot.start}|${cls}`);
+          cells[cls] = entry ? {
+            subjectName: entry.subjectName,
+            teacherName: entry.teacherName,
+            room: entry.room
+          } : null;
+        });
+        rows.push({
+          day,
+          period: slot.label,
+          duration: `${slot.start} - ${slot.end}`,
+          isBreak: false,
+          cells
+        });
+      });
+    });
+    return rows;
+  });
+}
+
+// ============================================
+// BUILD MATRIX TIMETABLE WITH PDF_SCHEDULE TIME RANGES
+// ============================================
+
+function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[]): any {
+  const combinedEntries = combineMultiSubjectEntries(entries);
+  const uniqueClasses = dedupeClassesByName(classList);
+
+  // Use PDF_SCHEDULE for time slots
+  const timeSlots = PDF_SCHEDULE.map(slot => ({
+    start: slot.start,
+    end: slot.end,
+    label: slot.label,
+    isBreak: slot.type === "break"
+  }));
+
+  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
+  const matrix: any = {};
+  days.forEach(day => {
+    matrix[day] = {};
+    timeSlots.forEach((slot) => {
+      matrix[day][slot.start] = {
+        label: slot.label,
+        isBreak: slot.isBreak,
+        startTime: slot.start,
+        endTime: slot.end,
+        entries: []
+      };
+    });
+  });
+
+  combinedEntries.forEach(entry => {
+    let entryStart = entry.startTime;
+    if (entryStart && entryStart.length === 4) {
+      entryStart = `0${entryStart}`;
+    }
+
+    let matchedSlot = timeSlots.find(slot => {
+      return entryStart >= slot.start && entryStart < slot.end;
+    });
+
+    if (!matchedSlot) {
+      matchedSlot = timeSlots.find(slot => slot.start === entryStart);
+    }
+
+    if (!matchedSlot) {
+      matchedSlot = timeSlots.find(slot => {
+        return parseInt(slot.label) === entry.periodNumber;
+      });
+    }
+
+    if (!matchedSlot) {
+      matchedSlot = timeSlots.find(slot => {
+        return entryStart >= slot.start && entry.endTime <= slot.end;
+      });
+    }
+
+    if (matchedSlot) {
+      if (matrix[entry.day] && matrix[entry.day][matchedSlot.start]) {
+        matrix[entry.day][matchedSlot.start].entries.push(entry);
+      }
+    } else {
+      const entryHour = parseInt(entryStart.split(':')[0]);
+      const closestSlot = timeSlots.find(slot => {
+        const slotHour = parseInt(slot.start.split(':')[0]);
+        return slotHour === entryHour;
+      });
+
+      if (closestSlot && matrix[entry.day] && matrix[entry.day][closestSlot.start]) {
+        matrix[entry.day][closestSlot.start].entries.push(entry);
+      } else {
+        const firstSlot = timeSlots[0];
+        if (matrix[entry.day] && matrix[entry.day][firstSlot.start]) {
+          matrix[entry.day][firstSlot.start].entries.push(entry);
+        }
+      }
+    }
+  });
+
+  const displayTimeSlots = timeSlots.map(slot => ({
+    start: slot.start,
+    end: slot.end,
+    label: slot.label,
+    isBreak: slot.isBreak,
+    display: slot.isBreak ? slot.label : `${slot.start} - ${slot.end}`
+  }));
+
+  return {
+    matrix,
+    days,
+    timeSlots: displayTimeSlots,
+    rawTimeSlots: timeSlots,
+    labels: timeSlots.map(s => s.label),
+    isBreak: timeSlots.map(s => s.isBreak),
+    classes: uniqueClasses
+  };
+}
+
+function dedupeClassesByName(classList: Class[]): Class[] {
+  const seen = new Set<string>();
+  const result: Class[] = [];
+  classList.forEach((c) => {
+    const fullName = c.department ? `${c.className} ${c.department}` : c.className;
+    const key = fullName.trim().toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push({
+        ...c,
+        displayName: fullName
+      });
+    }
+  });
+  return result;
+}
+
+function generateMockData() {
+  const mockTeachers: Teacher[] = [
+    { _id: "t1", name: "John Doe", email: "john@school.com", phone: "699123456", qualification: "BSc Math", subjectIds: ["s1"], classIds: ["c1"] },
+    { _id: "t2", name: "Jane Smith", email: "jane@school.com", phone: "699234567", qualification: "BEd English", subjectIds: ["s2"], classIds: ["c2"] },
+    { _id: "t3", name: "Michael Brown", email: "michael@school.com", phone: "699345678", qualification: "PhD Physics", subjectIds: ["s3"], classIds: ["c3"] },
+    { _id: "t4", name: "Sarah Wilson", email: "sarah@school.com", phone: "699456789", qualification: "MSc Chemistry", subjectIds: ["s4"], classIds: ["c1"] },
+    { _id: "t5", name: "David Kim", email: "david@school.com", phone: "699567890", qualification: "BEd History", subjectIds: ["s5"], classIds: ["c3"] },
+  ];
+
+  const mockClasses: Class[] = [
+    { _id: "c1", className: "Form 4", department: "Science A", cycle: "First Cycle" },
+    { _id: "c2", className: "Form 5", department: "Science A", cycle: "Second Cycle" },
+    { _id: "c3", className: "Form 3", department: "Arts", cycle: "First Cycle" },
+    { _id: "c4", className: "Form 4", department: "Commercial", cycle: "First Cycle" },
+    { _id: "c5", className: "Form 5", department: "Arts", cycle: "Second Cycle" },
+  ];
+
+  const mockSubjects: Subject[] = [
+    { _id: "s1", name: "Mathematics", code: "MATH" },
+    { _id: "s2", name: "English", code: "ENG" },
+    { _id: "s3", name: "Physics", code: "PHY" },
+    { _id: "s4", name: "Chemistry", code: "CHEM" },
+    { _id: "s5", name: "History", code: "HIST" },
+    { _id: "s6", name: "Geography", code: "GEOG" },
+  ];
+
+  const mockEntries: TimetableEntry[] = [];
+  const periods = [1, 2, 3, 4, 5, 6];
+  const days = DAYS.slice(0, 5);
+
+  const timeSlots = PDF_SCHEDULE.filter(s => s.type === "period").map(s => s.start);
+  const endSlots = PDF_SCHEDULE.filter(s => s.type === "period").map(s => s.end);
+
+  mockTeachers.forEach((teacher, ti) => {
+    days.forEach((day, di) => {
+      periods.forEach((period, pi) => {
+        if (Math.random() > 0.5) {
+          const cls = mockClasses[(ti + di + pi) % mockClasses.length];
+          const subj = mockSubjects[(ti + di) % mockSubjects.length];
+          const cycle: "first" | "second" = ti % 2 === 0 ? "first" : "second";
+          const timeIndex = pi % timeSlots.length;
+
+          mockEntries.push({
+            id: `entry_${ti}_${di}_${pi}`,
+            teacherId: teacher._id,
+            teacherName: teacher.name,
+            classId: cls._id,
+            className: cls.className,
+            subjectId: subj._id,
+            subjectName: subj.name,
+            subjectCode: subj.code,
+            day,
+            startTime: timeSlots[timeIndex],
+            endTime: endSlots[timeIndex],
+            periodNumber: period,
+            cycle,
+            ratePerPeriod: CYCLE_RATES[cycle],
+            room: `Room ${Math.floor(Math.random() * 10) + 1}`,
+            academicYear: "2026-2027",
+            isActive: true,
+          });
+        }
+      });
+    });
+  });
+
+  return { teachers: mockTeachers, classes: mockClasses, subjects: mockSubjects, entries: mockEntries };
+}
+
+// ============================================
+// STAT CARD COMPONENT
+// ============================================
+
+const StatCard = memo(function StatCard({
+  label,
+  value,
+  valueClassName = "",
+}: {
+  label: string;
+  value: number;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-stone-200 p-4">
+      <p className="text-xs text-black/40 font-medium uppercase tracking-wider">{label}</p>
+      <p className={`text-2xl font-bold mt-1 ${valueClassName}`}>{value}</p>
+    </div>
+  );
+});
+
+const CycleBadge = memo(function CycleBadge({ cycle }: { cycle: "first" | "second" }) {
+  return (
+    <span
+      className={`text-xs px-2 py-1 rounded-full font-bold ${cycle === "first" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"
+        }`}
+    >
+      {cycle === "first" ? "1st Cycle" : "2nd Cycle"}
+    </span>
+  );
+});
 
 // ============================================
 // MAIN TIMETABLE ADMIN PAGE
@@ -92,247 +655,118 @@ export function TimetableAdminPage() {
   const [isOnline, setIsOnline] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [stats, setStats] = useState<TimetableStats>({
     totalPeriods: 0,
     totalTeachers: 0,
     totalClasses: 0,
     totalPotential: 0,
     firstCyclePeriods: 0,
-    secondCyclePeriods: 0
+    secondCyclePeriods: 0,
   });
+  const [filterClass, setFilterClass] = useState<string>("");
+  const [filterTeacher, setFilterTeacher] = useState<string>("");
 
-  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  // School schedule settings (used by the auto-generate wizard).
+  const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>({
+    schoolStartTime: "08:00",
+    schoolEndTime: "14:00",
+    breakStart: "10:15",
+    breakEnd: "10:30",
+    periodDurationMinutes: 45,
+    schoolDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    periodsPerDay: 6,
+  });
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateConflicts, setGenerateConflicts] = useState<GenerateConflict[]>([]);
+
   const currentYear = new Date().getFullYear();
-  const academicYear = `${currentYear}-${currentYear + 1}`;
-
-  // ============================================
-  // LOCAL STORAGE HELPERS
-  // ============================================
-
-  const saveToLocalStorage = (key: string, data: any) => {
-    try {
-      localStorage.setItem(`timetable_${key}`, JSON.stringify(data));
-    } catch (error) {
-      console.error("Error saving to localStorage:", error);
-    }
-  };
-
-  const loadFromLocalStorage = (key: string) => {
-    try {
-      const data = localStorage.getItem(`timetable_${key}`);
-      return data ? JSON.parse(data) : null;
-    } catch (error) {
-      console.error("Error loading from localStorage:", error);
-      return null;
-    }
-  };
-
-  // ============================================
-  // DATA MAPPING FUNCTIONS
-  // ============================================
-
-  const mapApiEntry = (entry: any): TimetableEntry => {
-    const teacherObj = entry.teacherId || {};
-    const classObj = entry.classId || {};
-    const subjectObj = entry.subjectId || {};
-    
-    return {
-      id: entry._id || entry.id || `temp_${Date.now()}`,
-      _id: entry._id || entry.id,
-      teacherId: teacherObj._id || entry.teacherId || "",
-      teacherName: teacherObj.name || entry.teacherName || "Unknown",
-      classId: classObj._id || entry.classId || "",
-      className: classObj.className || entry.className || "Unknown",
-      subjectId: subjectObj._id || entry.subjectId || "",
-      subjectName: subjectObj.name || entry.subjectName || "Unknown",
-      subjectCode: subjectObj.code || entry.subjectCode || "",
-      day: entry.day || "",
-      startTime: entry.startTime || "",
-      endTime: entry.endTime || "",
-      periodNumber: entry.periodNumber || 1,
-      cycle: entry.cycle || "first",
-      ratePerPeriod: entry.ratePerPeriod || 500,
-      room: entry.room || "",
-      academicYear: entry.academicYear || "2024-2025",
-      isActive: entry.isActive !== undefined ? entry.isActive : true
-    };
-  };
-
-  const mapForApi = (entry: TimetableEntry) => {
-    return {
-      teacherId: entry.teacherId,
-      classId: entry.classId,
-      subjectId: entry.subjectId,
-      day: entry.day,
-      startTime: entry.startTime,
-      endTime: entry.endTime,
-      periodNumber: entry.periodNumber,
-      cycle: entry.cycle,
-      room: entry.room || "",
-      academicYear: entry.academicYear || "2024-2025",
-      isActive: entry.isActive
-    };
-  };
-
-  // ============================================
-  // GENERATE MOCK DATA
-  // ============================================
-
-  const generateMockData = () => {
-    const mockTeachers = [
-      { _id: "t1", name: "John Doe", email: "john@school.com", phone: "699123456", qualification: "BSc Math", subjectIds: ["s1"], classIds: ["c1"] },
-      { _id: "t2", name: "Jane Smith", email: "jane@school.com", phone: "699234567", qualification: "BEd English", subjectIds: ["s2"], classIds: ["c2"] },
-      { _id: "t3", name: "Michael Brown", email: "michael@school.com", phone: "699345678", qualification: "PhD Physics", subjectIds: ["s3"], classIds: ["c3"] },
-      { _id: "t4", name: "Sarah Wilson", email: "sarah@school.com", phone: "699456789", qualification: "MSc Chemistry", subjectIds: ["s4"], classIds: ["c1"] },
-      { _id: "t5", name: "David Kim", email: "david@school.com", phone: "699567890", qualification: "BEd History", subjectIds: ["s5"], classIds: ["c3"] },
-    ];
-    
-    const mockClasses = [
-      { _id: "c1", className: "Form 4 Science A", department: "Science" },
-      { _id: "c2", className: "Form 5 Science A", department: "Science" },
-      { _id: "c3", className: "Form 3 Arts", department: "Arts" },
-      { _id: "c4", className: "Form 4 Commercial", department: "Commercial" },
-      { _id: "c5", className: "Form 5 Arts", department: "Arts" },
-    ];
-    
-    const mockSubjects = [
-      { _id: "s1", name: "Mathematics", code: "MATH" },
-      { _id: "s2", name: "English", code: "ENG" },
-      { _id: "s3", name: "Physics", code: "PHY" },
-      { _id: "s4", name: "Chemistry", code: "CHEM" },
-      { _id: "s5", name: "History", code: "HIST" },
-      { _id: "s6", name: "Geography", code: "GEOG" },
-    ];
-
-    const mockEntries: TimetableEntry[] = [];
-    const periods = [1, 2, 3, 4, 5, 6];
-    const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-
-    mockTeachers.forEach((teacher, ti) => {
-      days.forEach((day, di) => {
-        periods.forEach((period, pi) => {
-          if (Math.random() > 0.5) {
-            const cls = mockClasses[(ti + di + pi) % mockClasses.length];
-            const subj = mockSubjects[(ti + di) % mockSubjects.length];
-            const cycle = ti % 2 === 0 ? "first" : "second";
-            mockEntries.push({
-              id: `entry_${ti}_${di}_${pi}`,
-              teacherId: teacher._id,
-              teacherName: teacher.name,
-              classId: cls._id,
-              className: cls.className,
-              subjectId: subj._id,
-              subjectName: subj.name,
-              subjectCode: subj.code,
-              day: day,
-              startTime: `${8 + period}:00`,
-              endTime: `${8 + period + 1}:00`,
-              periodNumber: period,
-              cycle: cycle as "first" | "second",
-              ratePerPeriod: cycle === "first" ? 500 : 700,
-              room: `Room ${Math.floor(Math.random() * 10) + 1}`,
-              academicYear: "2024-2025",
-              isActive: true
-            });
-          }
-        });
-      });
-    });
-
-    return { teachers: mockTeachers, classes: mockClasses, subjects: mockSubjects, entries: mockEntries };
-  };
+  const academicYear = "2026-2027";
 
   // ============================================
   // FETCH DATA
   // ============================================
 
+  const applyMockDataFallback = useCallback(() => {
+    const mockData = generateMockData();
+    setEntries(mockData.entries);
+    setTeachers(mockData.teachers);
+    setClasses(mockData.classes);
+    setSubjects(mockData.subjects);
+    setStats(calculateStats(mockData.entries));
+    saveToLocalStorage("entries", mockData.entries);
+    saveToLocalStorage("teachers", mockData.teachers);
+    saveToLocalStorage("classes", mockData.classes);
+    saveToLocalStorage("subjects", mockData.subjects);
+  }, []);
+
   const fetchAllData = useCallback(async () => {
     try {
       setLoading(true);
       setApiError(null);
-      
-      // Load from localStorage first
-      const cachedEntries = loadFromLocalStorage('entries');
-      const cachedTeachers = loadFromLocalStorage('teachers');
-      const cachedClasses = loadFromLocalStorage('classes');
-      const cachedSubjects = loadFromLocalStorage('subjects');
 
-      if (cachedEntries && cachedEntries.length > 0) {
-        setEntries(cachedEntries);
+      const cachedEntries = loadFromLocalStorage("entries");
+      const cachedTeachers = loadFromLocalStorage("teachers");
+      const cachedClasses = loadFromLocalStorage("classes");
+      const cachedSubjects = loadFromLocalStorage("subjects");
+      const hasCache = cachedEntries && cachedEntries.length > 0;
+
+      if (hasCache) {
+        const sanitizedCached: TimetableEntry[] = (cachedEntries as TimetableEntry[]).map(sanitizeEntry);
+        setEntries(sanitizedCached);
         setTeachers(cachedTeachers || []);
         setClasses(cachedClasses || []);
         setSubjects(cachedSubjects || []);
-        calculateStats(cachedEntries);
+        setStats(calculateStats(sanitizedCached));
+        saveToLocalStorage("entries", sanitizedCached);
       }
-      
-      // Try to fetch from API
+
       try {
         const [timetableRes, teachersRes, classesRes, subjectsRes] = await Promise.all([
           axios.get(`${API_BASE}/timetable`).catch(() => ({ data: { success: false } })),
           axios.get(`${API_BASE}/users?role=teacher`).catch(() => ({ data: { success: false } })),
           axios.get(`${API_BASE}/classes`).catch(() => ({ data: { success: false } })),
-          axios.get(`${API_BASE}/subjects`).catch(() => ({ data: { success: false } }))
+          axios.get(`${API_BASE}/subjects`).catch(() => ({ data: { success: false } })),
         ]);
 
-        const apiSuccess = timetableRes.data.success || teachersRes.data.success || classesRes.data.success || subjectsRes.data.success;
-        
+        const apiSuccess =
+          timetableRes.data.success || teachersRes.data.success || classesRes.data.success || subjectsRes.data.success;
+
         if (apiSuccess) {
           setIsOnline(true);
           setApiError(null);
-          
+
           if (timetableRes.data.success && timetableRes.data.data.length > 0) {
             const mappedEntries = timetableRes.data.data.map(mapApiEntry);
             setEntries(mappedEntries);
-            saveToLocalStorage('entries', mappedEntries);
-            calculateStats(mappedEntries);
+            saveToLocalStorage("entries", mappedEntries);
+            setStats(calculateStats(mappedEntries));
           }
-
           if (teachersRes.data.success && teachersRes.data.data.length > 0) {
             setTeachers(teachersRes.data.data);
-            saveToLocalStorage('teachers', teachersRes.data.data);
+            saveToLocalStorage("teachers", teachersRes.data.data);
           }
-
           if (classesRes.data.success && classesRes.data.data.length > 0) {
             setClasses(classesRes.data.data);
-            saveToLocalStorage('classes', classesRes.data.data);
+            saveToLocalStorage("classes", classesRes.data.data);
           }
-
           if (subjectsRes.data.success && subjectsRes.data.data.length > 0) {
             setSubjects(subjectsRes.data.data);
-            saveToLocalStorage('subjects', subjectsRes.data.data);
+            saveToLocalStorage("subjects", subjectsRes.data.data);
           }
+        } else if (!hasCache) {
+          applyMockDataFallback();
+          toast.info("Using demo data");
         } else {
-          if (!cachedEntries || cachedEntries.length === 0) {
-            const mockData = generateMockData();
-            setEntries(mockData.entries);
-            setTeachers(mockData.teachers);
-            setClasses(mockData.classes);
-            setSubjects(mockData.subjects);
-            calculateStats(mockData.entries);
-            saveToLocalStorage('entries', mockData.entries);
-            saveToLocalStorage('teachers', mockData.teachers);
-            saveToLocalStorage('classes', mockData.classes);
-            saveToLocalStorage('subjects', mockData.subjects);
-            toast.info("Using demo data");
-          } else {
-            toast.info("Using cached data");
-          }
+          toast.info("Using cached data");
         }
-      } catch (apiError) {
-        console.error("API Error:", apiError);
+      } catch (apiErr) {
+        console.error("API Error:", apiErr);
         setApiError("API server error. Using local data.");
         setIsOnline(false);
-        if (!cachedEntries || cachedEntries.length === 0) {
-          const mockData = generateMockData();
-          setEntries(mockData.entries);
-          setTeachers(mockData.teachers);
-          setClasses(mockData.classes);
-          setSubjects(mockData.subjects);
-          calculateStats(mockData.entries);
-          saveToLocalStorage('entries', mockData.entries);
-          saveToLocalStorage('teachers', mockData.teachers);
-          saveToLocalStorage('classes', mockData.classes);
-          saveToLocalStorage('subjects', mockData.subjects);
+        if (!hasCache) {
+          applyMockDataFallback();
           toast.info("Using demo data (offline mode)");
         }
       }
@@ -342,29 +776,181 @@ export function TimetableAdminPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyMockDataFallback]);
 
-  const calculateStats = (entries: TimetableEntry[]) => {
-    const firstCycle = entries.filter(e => e.cycle === "first").length;
-    const secondCycle = entries.filter(e => e.cycle === "second").length;
-    const totalPotential = entries.reduce((sum, e) => sum + e.ratePerPeriod, 0);
-    
-    setStats({
-      totalPeriods: entries.length,
-      totalTeachers: new Set(entries.map(e => e.teacherId)).size,
-      totalClasses: new Set(entries.map(e => e.classId)).size,
-      totalPotential,
-      firstCyclePeriods: firstCycle,
-      secondCyclePeriods: secondCycle
-    });
-  };
-
-  useEffect(() => {
+    useEffect(() => {
     fetchAllData();
   }, [fetchAllData]);
 
   // ============================================
-  // FILTERS & SEARCH
+  // AUTO-GENERATION: School settings + teacher availability
+  // ============================================
+
+  // Load saved school schedule settings for the active academic year.
+  const loadSchoolSettings = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/settings?academicYear=${academicYear}`);
+      if (res.data.success && res.data.data) {
+        const s = res.data.data;
+        setSchoolSettings({
+          _id: s._id,
+          schoolStartTime: s.schoolStartTime || "08:00",
+          schoolEndTime: s.schoolEndTime || "14:00",
+          breakStart: s.breakStart || "10:15",
+          breakEnd: s.breakEnd || "10:30",
+          periodDurationMinutes: s.periodDurationMinutes || 45,
+          schoolDays: s.schoolDays || ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+          periodsPerDay: s.periodsPerDay || 6,
+        });
+      }
+    } catch (err) {
+      // No saved settings yet — keep defaults.
+    }
+  }, [academicYear]);
+
+  useEffect(() => {
+    loadSchoolSettings();
+  }, [loadSchoolSettings]);
+
+  const activeTeachers = useMemo(
+    () => teachers.filter((t) => OBJECT_ID_RE.test(t._id || "")),
+    [teachers]
+  );
+
+  // Save a single teacher's availability (used by the setup wizard).
+  const saveTeacherAvailability = useCallback(
+    async (teacherId: string, isPermanent: boolean, availableDays: string[]) => {
+      try {
+        await axios.patch(`${API_BASE}/users/${teacherId}`, {
+          isPermanent,
+          availableDays,
+        });
+        // Optimistically update local state.
+        setTeachers((prev) =>
+          prev.map((t) =>
+            t._id === teacherId
+              ? { ...t, isPermanent, availableDays }
+              : t
+          )
+        );
+        return true;
+      } catch (err: any) {
+        toast.error(err?.response?.data?.message || "Failed to save teacher availability");
+        return false;
+      }
+    },
+    []
+  );
+
+  // Persist the school schedule settings.
+  const saveSchoolSettings = useCallback(
+    async (settings: Omit<SchoolSettings, "_id">) => {
+      try {
+        const res = await axios.post(`${API_BASE}/settings`, {
+          academicYear,
+          ...settings,
+        });
+        if (res.data.success) {
+          setSchoolSettings(res.data.data);
+          return true;
+        }
+        return false;
+      } catch (err: any) {
+        toast.error(err?.response?.data?.message || "Failed to save school settings");
+        return false;
+      }
+    },
+    [academicYear]
+  );
+
+  // Trigger auto-generation of the timetable from settings + availability.
+  const handleGenerateTimetable = useCallback(async () => {
+    if (!window.confirm(
+      "This will replace the current timetable for the selected academic year. Continue?"
+    )) {
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      // Ensure every active teacher has explicit availability before generating.
+      // The backend generator (routes/timetable.js isTeacherAvailable) excludes
+      // any teacher whose saved config is isPermanent=false with an empty
+      // availableDays list — and the User schema defaults never-edited teachers
+      // to exactly that, so teachers the admin never configured would silently
+      // receive zero periods. Persist the wizard's default ("available all
+      // days") for anyone still unconfigured; teachers with an explicit config
+      // are left untouched.
+      const unconfigured = activeTeachers.filter(
+        (t) =>
+          !t.isPermanent &&
+          (!Array.isArray(t.availableDays) || t.availableDays.length === 0)
+      );
+      if (unconfigured.length > 0) {
+        try {
+          await Promise.all(
+            unconfigured.map((t) =>
+              axios.patch(`${API_BASE}/users/${t._id}`, {
+                isPermanent: true,
+                availableDays: [...DAYS],
+              })
+            )
+          );
+          setTeachers((prev) =>
+            prev.map((t) =>
+              unconfigured.some((u) => u._id === t._id)
+                ? { ...t, isPermanent: true, availableDays: [...DAYS] }
+                : t
+            )
+          );
+          toast.info(
+            `Applied default availability (all days) to ${unconfigured.length} teacher(s) with no saved availability.`
+          );
+        } catch (patchErr) {
+          console.error("Failed to apply default availability:", patchErr);
+          toast.warning(
+            "Could not save default availability for some teachers — they may be excluded from generation. Open Step 1 and save availability manually."
+          );
+        }
+      }
+
+      const res = await axios.post(`${API_BASE}/timetable/generate`, {
+        academicYear,
+      });
+
+      if (res.data.success) {
+        const { entries: generated, conflicts } = res.data.data;
+        const mappedEntries = (generated || []).map(mapApiEntry);
+        setEntries(mappedEntries);
+        saveToLocalStorage("entries", mappedEntries);
+        setStats(calculateStats(mappedEntries));
+        setGenerateConflicts(Array.isArray(conflicts) ? conflicts : []);
+
+        if (conflicts && conflicts.length > 0) {
+          // Keep the wizard open so the conflict report stays visible in Step 3
+          // (previously these were only logged to the console via console.table).
+          toast.warning(
+            `${mappedEntries.length} periods generated, but ${conflicts.length} conflict(s) were found — see the report below.`
+          );
+        } else {
+          toast.success(`${mappedEntries.length} periods scheduled successfully!`);
+          setShowSetupWizard(false);
+        }
+        fetchAllData();
+      } else {
+        toast.error(res.data.message || "Generation failed");
+        setShowSetupWizard(false);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || "Failed to generate timetable");
+      setShowSetupWizard(false);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [academicYear, fetchAllData, activeTeachers]);
+
+  // ============================================
+  // FILTERED DATA
   // ============================================
 
   const filteredEntries = useMemo(() => {
@@ -372,232 +958,390 @@ export function TimetableAdminPage() {
 
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
-      filtered = filtered.filter(e =>
-        e.teacherName.toLowerCase().includes(term) ||
-        e.className.toLowerCase().includes(term) ||
-        e.subjectName.toLowerCase().includes(term) ||
-        (e.subjectCode && e.subjectCode.toLowerCase().includes(term))
+      filtered = filtered.filter(
+        (e) =>
+          e.teacherName.toLowerCase().includes(term) ||
+          e.className.toLowerCase().includes(term) ||
+          e.subjectName.toLowerCase().includes(term) ||
+          (e.subjectCode && e.subjectCode.toLowerCase().includes(term))
       );
     }
+    if (selectedTeacher) filtered = filtered.filter((e) => e.teacherId === selectedTeacher);
+    if (selectedClass) filtered = filtered.filter((e) => e.classId === selectedClass);
+    if (selectedDay) filtered = filtered.filter((e) => e.day === selectedDay);
+    if (selectedCycle) filtered = filtered.filter((e) => e.cycle === selectedCycle);
 
-    if (selectedTeacher) {
-      filtered = filtered.filter(e => e.teacherId === selectedTeacher);
-    }
-
-    if (selectedClass) {
-      filtered = filtered.filter(e => e.classId === selectedClass);
-    }
-
-    if (selectedDay) {
-      filtered = filtered.filter(e => e.day === selectedDay);
-    }
-
-    if (selectedCycle) {
-      filtered = filtered.filter(e => e.cycle === selectedCycle);
-    }
+    if (filterClass) filtered = filtered.filter((e) => e.classId === filterClass);
+    if (filterTeacher) filtered = filtered.filter((e) => e.teacherId === filterTeacher);
 
     return filtered;
-  }, [entries, searchTerm, selectedTeacher, selectedClass, selectedDay, selectedCycle]);
+  }, [entries, searchTerm, selectedTeacher, selectedClass, selectedDay, selectedCycle, filterClass, filterTeacher]);
+
+  const hasActiveFilters = Boolean(selectedTeacher || selectedClass || selectedDay || selectedCycle || searchTerm || filterClass || filterTeacher);
+
+  const clearFilters = useCallback(() => {
+    setSelectedTeacher("");
+    setSelectedClass("");
+    setSelectedDay("");
+    setSelectedCycle("");
+    setSearchTerm("");
+    setFilterClass("");
+    setFilterTeacher("");
+  }, []);
+
+  const uniqueClasses = useMemo(() => {
+    const classMap = new Map<string, Class>();
+    classes.forEach(c => {
+      const fullName = c.department ? `${c.className} ${c.department}` : c.className;
+      if (!classMap.has(fullName)) {
+        classMap.set(fullName, c);
+      }
+    });
+    return Array.from(classMap.values());
+  }, [classes]);
 
   // ============================================
   // CRUD OPERATIONS
   // ============================================
 
-  const syncToAPI = async (method: string, url: string, data?: any) => {
+  const syncToAPI = useCallback(async (method: string, url: string, data?: any) => {
     try {
-      const response = await axios({ method, url, data });
+      const response = await axios({
+        method,
+        url,
+        data,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       console.error("API sync failed:", error);
-      return null;
-    }
-  };
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        console.error('Response status:', error.response.status);
 
-  const handleSaveEntry = async (entry: TimetableEntry) => {
-    if (isSaving) return;
-    
-    try {
+        const errorMsg = error.response.data?.message || `Server error: ${error.response.status}`;
+
+        if (errorMsg.includes('already assigned to')) {
+          throw new Error(errorMsg);
+        }
+
+        throw new Error(errorMsg);
+      } else if (error.request) {
+        console.error('No response received');
+        throw new Error('No response from server');
+      } else {
+        throw new Error(error.message);
+      }
+    }
+  }, []);
+
+  const handleSaveEntry = useCallback(
+    async (entry: TimetableEntry) => {
+      if (isSaving) return;
+
       if (!entry.teacherId || !entry.classId || !entry.subjectId) {
         toast.error("Please fill in all required fields");
         return;
       }
 
-      const conflict = entries.find(e =>
-        e.teacherId === entry.teacherId &&
-        e.day === entry.day &&
-        e.startTime === entry.startTime &&
-        e.id !== entry.id
-      );
+      const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
+      const sanitizedEntry: TimetableEntry = { ...entry, startTime, endTime };
 
-      if (conflict) {
-        toast.error(`Teacher already has a period at this time on ${entry.day}`);
+      if (sanitizedEntry.startTime >= sanitizedEntry.endTime) {
+        toast.error("Start time must be before end time");
         return;
       }
 
       setIsSaving(true);
-      
-      let updatedEntries;
-      const isExisting = entries.some(e => e.id === entry.id);
-      const apiData = mapForApi(entry);
+      try {
+        const isNew = !sanitizedEntry._id &&
+          (!sanitizedEntry.id || sanitizedEntry.id.startsWith('entry_'));
 
-      if (isExisting) {
-        const existingEntry = entries.find(e => e.id === entry.id);
-        const apiId = existingEntry?._id || existingEntry?.id;
-        updatedEntries = entries.map(e => e.id === entry.id ? entry : e);
-        await syncToAPI('PUT', `${API_BASE}/timetable/${apiId}`, apiData);
-        toast.success("Timetable entry updated");
-      } else {
-        const newEntry = { ...entry, id: `entry_${Date.now()}` };
-        updatedEntries = [...entries, newEntry];
-        const result = await syncToAPI('POST', `${API_BASE}/timetable`, apiData);
-        if (result && result.data && result.data._id) {
-          const updatedEntry = { ...newEntry, _id: result.data._id, id: result.data._id };
-          updatedEntries = updatedEntries.map(e => e.id === newEntry.id ? updatedEntry : e);
+        const isExisting = !isNew && entries.some((e) => {
+          const matchById =
+            e.id === sanitizedEntry.id ||
+            e._id === sanitizedEntry.id ||
+            e.id === sanitizedEntry._id ||
+            e._id === sanitizedEntry._id ||
+            (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
+          return matchById;
+        });
+
+        const apiData = mapForApi(sanitizedEntry);
+        let updatedEntries: TimetableEntry[];
+
+        if (isExisting) {
+          const existingEntry = entries.find((e) => {
+            const matchById =
+              e.id === sanitizedEntry.id ||
+              e._id === sanitizedEntry.id ||
+              e.id === sanitizedEntry._id ||
+              e._id === sanitizedEntry._id ||
+              (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
+            return matchById;
+          });
+
+          const apiId = existingEntry?._id || existingEntry?.id || sanitizedEntry._id || sanitizedEntry.id;
+
+          if (!apiId) {
+            toast.error("Invalid entry ID");
+            setIsSaving(false);
+            return;
+          }
+
+          const result = await syncToAPI("PUT", `${API_BASE}/timetable/${apiId}`, apiData);
+
+          if (result?.success) {
+            updatedEntries = entries.map((e) => {
+              const isMatching =
+                e.id === sanitizedEntry.id ||
+                e._id === sanitizedEntry.id ||
+                e.id === sanitizedEntry._id ||
+                e._id === sanitizedEntry._id ||
+                (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
+
+              if (isMatching) {
+                return {
+                  ...sanitizedEntry,
+                  _id: e._id || sanitizedEntry._id,
+                  id: e.id || sanitizedEntry.id
+                };
+              }
+              return e;
+            });
+
+            setEntries(updatedEntries);
+            setStats(calculateStats(updatedEntries));
+            saveToLocalStorage("entries", updatedEntries);
+            toast.success("Timetable entry updated");
+          } else {
+            throw new Error(result?.message || "Failed to update");
+          }
+        } else {
+          try {
+            const teacherConflict = entries.find((e) =>
+              e.teacherId === sanitizedEntry.teacherId &&
+              e.day === sanitizedEntry.day &&
+              e.startTime === sanitizedEntry.startTime &&
+              e.academicYear === sanitizedEntry.academicYear &&
+              e.id !== sanitizedEntry.id &&
+              e._id !== sanitizedEntry._id
+            );
+
+            if (teacherConflict) {
+              const conflictTeacher = teachers.find(t => t._id === teacherConflict.teacherId);
+              toast.error(
+                `⚠️ Teacher "${conflictTeacher?.name || teacherConflict.teacherName}" is already assigned to ${teacherConflict.className} at this time on ${sanitizedEntry.day}.\n\n` +
+                `To add multiple subjects to the same class at the same time, use a different teacher.`
+              );
+              setIsSaving(false);
+              return;
+            }
+
+            const result = await syncToAPI("POST", `${API_BASE}/timetable`, apiData);
+
+            if (result?.success && result?.data) {
+              const savedData = result.data;
+              const savedEntry = {
+                ...sanitizedEntry,
+                id: savedData._id || savedData.id || `entry_${Date.now()}`,
+                _id: savedData._id || savedData.id,
+                ratePerPeriod: savedData.ratePerPeriod || sanitizedEntry.ratePerPeriod,
+              };
+
+              updatedEntries = [...entries, savedEntry];
+              setEntries(updatedEntries);
+              setStats(calculateStats(updatedEntries));
+              saveToLocalStorage("entries", updatedEntries);
+              toast.success("Timetable entry added successfully");
+            } else {
+              throw new Error(result?.message || "Failed to create entry");
+            }
+          } catch (error: any) {
+            if (error.message?.includes("already has a period") ||
+              error.message?.includes("already assigned")) {
+              toast.error(
+                `⚠️ ${error.message}\n\n` +
+                `This teacher already has a period at this time.\n` +
+                `To add multiple subjects to the same class at the same time,\n` +
+                `please use a different teacher for each subject.`
+              );
+            } else {
+              throw error;
+            }
+            setIsSaving(false);
+            return;
+          }
         }
-        toast.success("Timetable entry added");
+
+        setEditingEntry(null);
+        setShowAddModal(false);
+      } catch (error: any) {
+        console.error("Error saving timetable:", error);
+        toast.error(error instanceof Error ? error.message : "Failed to save entry");
+        if (error.message?.includes('already assigned to')) {
+          toast.error(`⚠️ ${error.message}`);
+        } else {
+          toast.error(error instanceof Error ? error.message : "Failed to save entry");
+        }
+        setIsSaving(false);
+        return;
+      } finally {
+        setIsSaving(false);
       }
+    },
+    [entries, isSaving, syncToAPI, teachers]
+  );
 
-      setEntries(updatedEntries);
-      calculateStats(updatedEntries);
-      saveToLocalStorage('entries', updatedEntries);
-      setEditingEntry(null);
-      setShowAddModal(false);
-    } catch (error) {
-      console.error("Error saving timetable:", error);
-      toast.error("Failed to save entry");
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  const handleDeleteEntry = useCallback(
+    async (id: string) => {
+      if (!window.confirm("Are you sure you want to delete this timetable entry?")) return;
+      if (isSaving) return;
 
-  const handleDeleteEntry = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this timetable entry?")) return;
-    if (isSaving) return;
-
-    try {
       setIsSaving(true);
-      const entryToDelete = entries.find(e => e.id === id);
-      const apiId = entryToDelete?._id || entryToDelete?.id;
-      
-      if (apiId) {
-        await syncToAPI('DELETE', `${API_BASE}/timetable/${apiId}`);
-      }
-      
-      const updatedEntries = entries.filter(e => e.id !== id);
-      setEntries(updatedEntries);
-      calculateStats(updatedEntries);
-      saveToLocalStorage('entries', updatedEntries);
-      toast.success("Timetable entry deleted");
-    } catch (error) {
-      console.error("Error deleting timetable:", error);
-      const updatedEntries = entries.filter(e => e.id !== id);
-      setEntries(updatedEntries);
-      calculateStats(updatedEntries);
-      saveToLocalStorage('entries', updatedEntries);
-      toast.warning("Deleted locally (API sync failed)");
-    } finally {
-      setIsSaving(false);
-    }
-  };
+      try {
+        const entryToDelete = entries.find((e) => e.id === id || e._id === id);
+        const apiId = entryToDelete?._id || entryToDelete?.id || id;
 
-  const handleBulkAdd = async (newEntries: TimetableEntry[]) => {
-    if (isSaving) return;
-    
-    try {
-      const validEntries = newEntries.filter(e => e.teacherId && e.classId && e.subjectId);
+        if (apiId) {
+          const result = await syncToAPI("DELETE", `${API_BASE}/timetable/${apiId}`);
+          if (result) {
+            toast.success("Timetable entry deleted");
+          } else {
+            toast.warning("Entry may have already been deleted");
+          }
+        }
+
+        const updatedEntries = entries.filter((e) => e.id !== id && e._id !== id);
+        setEntries(updatedEntries);
+        setStats(calculateStats(updatedEntries));
+        saveToLocalStorage("entries", updatedEntries);
+
+        if (editingEntry && (editingEntry.id === id || editingEntry._id === id)) {
+          setEditingEntry(null);
+        }
+      } catch (error) {
+        console.error("Error deleting timetable:", error);
+        const updatedEntries = entries.filter((e) => e.id !== id && e._id !== id);
+        setEntries(updatedEntries);
+        setStats(calculateStats(updatedEntries));
+        saveToLocalStorage("entries", updatedEntries);
+        toast.warning("Deleted locally (API sync failed)");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [entries, isSaving, syncToAPI, editingEntry]
+  );
+
+  const handleBulkAdd = useCallback(
+    async (newEntries: TimetableEntry[]) => {
+      if (isSaving) return;
+
+      const sanitizedNewEntries = newEntries.map(sanitizeEntry);
+      const validEntries = sanitizedNewEntries.filter((e) => e.teacherId && e.classId && e.subjectId);
       if (validEntries.length === 0) {
         toast.error("No valid entries to add");
         return;
       }
 
       setIsSaving(true);
-      const apiData = validEntries.map(mapForApi);
-      const result = await syncToAPI('POST', `${API_BASE}/timetable/bulk`, { entries: apiData });
-      
-      let updatedEntries = [...entries, ...validEntries];
-      if (result && result.data && result.data.entries) {
-        const apiEntries = result.data.entries;
-        updatedEntries = entries;
-        validEntries.forEach((entry, index) => {
-          if (apiEntries[index] && apiEntries[index]._id) {
-            updatedEntries.push({ ...entry, _id: apiEntries[index]._id, id: apiEntries[index]._id });
-          } else {
-            updatedEntries.push(entry);
-          }
-        });
-      } else {
-        updatedEntries = [...entries, ...validEntries];
+      try {
+        const apiData = validEntries.map(mapForApi);
+        const result = await syncToAPI("POST", `${API_BASE}/timetable/bulk`, { entries: apiData });
+        const updatedEntries = mergeBulkApiResults(entries, validEntries, result?.data?.entries);
+
+        setEntries(updatedEntries);
+        setStats(calculateStats(updatedEntries));
+        saveToLocalStorage("entries", updatedEntries);
+        toast.success(`${validEntries.length} entries added successfully`);
+        setShowBulkModal(false);
+      } catch (error) {
+        console.error("Error bulk adding timetable:", error);
+        toast.error("Failed to add entries");
+      } finally {
+        setIsSaving(false);
       }
+    },
+    [entries, isSaving, syncToAPI]
+  );
 
-      setEntries(updatedEntries);
-      calculateStats(updatedEntries);
-      saveToLocalStorage('entries', updatedEntries);
-      toast.success(`${validEntries.length} entries added successfully`);
-      setShowBulkModal(false);
-    } catch (error) {
-      console.error("Error bulk adding timetable:", error);
-      toast.error("Failed to add entries");
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  const handleCopyFromPrevious = useCallback(
+    async (sourceYear: string, targetYear: string) => {
+      if (isSaving) return;
 
-  const handleCopyFromPrevious = async (sourceYear: string, targetYear: string) => {
-    if (isSaving) return;
-    
-    try {
-      const sourceEntries = entries.filter(e => e.academicYear === sourceYear);
+      const sourceEntries = entries.filter((e) => e.academicYear === sourceYear);
       if (sourceEntries.length === 0) {
         toast.error("No entries found for the source year");
         return;
       }
 
       setIsSaving(true);
-      const copiedEntries = sourceEntries.map(e => ({
-        ...e,
-        id: `entry_${Date.now()}_${Math.random()}`,
-        academicYear: targetYear,
-        isActive: true
-      }));
+      try {
+        const copiedEntries = sourceEntries.map((e) => ({
+          ...sanitizeEntry(e),
+          id: `entry_${Date.now()}_${Math.random()}`,
+          academicYear: targetYear,
+          isActive: true,
+        }));
 
-      const apiData = copiedEntries.map(mapForApi);
-      const result = await syncToAPI('POST', `${API_BASE}/timetable/bulk`, { entries: apiData });
+        const apiData = copiedEntries.map(mapForApi);
+        const result = await syncToAPI("POST", `${API_BASE}/timetable/bulk`, { entries: apiData });
+        const updatedEntries = mergeBulkApiResults(entries, copiedEntries, result?.data?.entries);
 
-      let updatedEntries = [...entries, ...copiedEntries];
-      if (result && result.data && result.data.entries) {
-        const apiEntries = result.data.entries;
-        updatedEntries = entries;
-        copiedEntries.forEach((entry, index) => {
-          if (apiEntries[index] && apiEntries[index]._id) {
-            updatedEntries.push({ ...entry, _id: apiEntries[index]._id, id: apiEntries[index]._id });
-          } else {
-            updatedEntries.push(entry);
-          }
-        });
-      } else {
-        updatedEntries = [...entries, ...copiedEntries];
+        setEntries(updatedEntries);
+        setStats(calculateStats(updatedEntries));
+        saveToLocalStorage("entries", updatedEntries);
+        toast.success(`${copiedEntries.length} entries copied to ${targetYear}`);
+        setShowCopyModal(false);
+      } catch (error) {
+        console.error("Error copying timetable:", error);
+        toast.error("Failed to copy entries");
+      } finally {
+        setIsSaving(false);
       }
+    },
+    [entries, isSaving, syncToAPI]
+  );
 
-      setEntries(updatedEntries);
-      calculateStats(updatedEntries);
-      saveToLocalStorage('entries', updatedEntries);
-      toast.success(`${copiedEntries.length} entries copied to ${targetYear}`);
-      setShowCopyModal(false);
-    } catch (error) {
-      console.error("Error copying timetable:", error);
-      toast.error("Failed to copy entries");
-    } finally {
-      setIsSaving(false);
+  const handleEditRequest = useCallback((entry: TimetableEntry) => {
+    const existingEntry = entries.find(e =>
+      e.id === entry.id ||
+      e._id === entry.id ||
+      e.id === entry._id ||
+      e._id === entry._id
+    );
+
+    if (existingEntry) {
+      setEditingEntry(sanitizeEntry({
+        ...existingEntry,
+        id: existingEntry.id || existingEntry._id || `entry_${Date.now()}`,
+        _id: existingEntry._id || existingEntry.id,
+      }));
+    } else {
+      setEditingEntry(sanitizeEntry({
+        ...entry,
+        id: entry.id || entry._id || `entry_${Date.now()}`,
+        _id: entry._id || entry.id,
+      }));
     }
-  };
+  }, [entries]);
+
+  const closeEntryModal = useCallback(() => {
+    setEditingEntry(null);
+    setShowAddModal(false);
+  }, []);
 
   // ============================================
   // EXPORT FUNCTIONS
   // ============================================
 
-  const exportToCSV = () => {
+  const exportToCSV = useCallback(() => {
+    const combinedEntries = combineMultiSubjectEntries(filteredEntries);
     const headers = ["Day", "Start Time", "End Time", "Teacher", "Class", "Subject", "Cycle", "Rate", "Room"];
-    const rows = filteredEntries.map(e => [
+    const rows = combinedEntries.map((e) => [
       e.day,
       e.startTime,
       e.endTime,
@@ -605,11 +1349,11 @@ export function TimetableAdminPage() {
       e.className,
       e.subjectName,
       e.cycle === "first" ? "1st Cycle" : "2nd Cycle",
-      e.ratePerPeriod.toString(),
-      e.room || ""
+      e.ratePerPeriod,
+      e.room || "",
     ]);
 
-    const csv = [headers, ...rows].map(row => row.join(",")).join("\n");
+    const csv = [headers, ...rows].map((row) => row.map(csvField).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -618,14 +1362,532 @@ export function TimetableAdminPage() {
     a.click();
     URL.revokeObjectURL(url);
     toast.success("Timetable exported as CSV");
-  };
+  }, [filteredEntries]);
 
-  const exportToPDF = () => {
-    window.print();
-  };
+  const exportToPDF = useCallback(() => window.print(), []);
 
   // ============================================
-  // RENDER FUNCTIONS
+  // PDF DOWNLOAD - STANDARD FORMAT
+  // ============================================
+
+  const downloadStandardPDF = useCallback(async () => {
+    setIsDownloadingPdf(true);
+    try {
+      const res = await axios.get(`${API_BASE}/timetable`).catch(() => null);
+      const rawEntries = res?.data?.success ? res.data.data : null;
+      const freshEntries: TimetableEntry[] = rawEntries ? rawEntries.map(mapApiEntry) : entries;
+
+      if (freshEntries.length === 0) {
+        toast.error("No timetable entries to export");
+        return;
+      }
+
+      let filteredForExport = freshEntries;
+      if (filterClass) filteredForExport = filteredForExport.filter(e => e.classId === filterClass);
+      if (filterTeacher) filteredForExport = filteredForExport.filter(e => e.teacherId === filterTeacher);
+
+      const uniqueClasses = dedupeClassesByName(classes);
+      const grid = buildPdfGrid(filteredForExport, uniqueClasses);
+
+      const container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.top = '0';
+      container.style.left = '-9999px';
+      container.style.width = '1100px';
+      container.style.backgroundColor = 'white';
+      container.style.padding = '20px';
+      container.style.zIndex = '9999';
+      document.body.appendChild(container);
+
+      let filterLabel = "";
+      if (filterClass) {
+        const cls = classes.find(c => c._id === filterClass);
+        filterLabel = cls ? ` - ${cls.department ? `${cls.className} ${cls.department}` : cls.className}` : "";
+      } else if (filterTeacher) {
+        const teacher = teachers.find(t => t._id === filterTeacher);
+        filterLabel = teacher ? ` - ${teacher.name}` : "";
+      }
+
+      let htmlContent = `
+        <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
+          <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #D4AF37; padding-bottom: 8px;">
+            <h2 style="font-size: 18px; margin: 0; color: #D4AF37; font-weight: 800;">BELMON BILINGUAL HIGH SCHOOL</h2>
+            <p style="font-size: 11px; color: #666; margin: 3px 0;">Timetable • ${academicYear}${filterLabel}</p>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+            <thead>
+              <tr style="background: #D4AF37; color: white;">
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Period</th>
+                ${uniqueClasses.map((c) => `
+                  <th style="padding: 6px 8px; text-align: center; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">${c.department ? `${c.className} ${c.department}` : c.className}</th>
+                `).join('')}
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      grid.forEach((row, index) => {
+        const isFirstOfDay = index === 0 || grid[index - 1].day !== row.day;
+        const dayRowspan = grid.filter((r) => r.day === row.day).length;
+
+        htmlContent += `
+          <tr style="${row.isBreak ? 'background: #fef3c7;' : ''}">
+            ${isFirstOfDay ? `
+              <td style="padding: 6px 8px; font-weight: 600; text-align: center; vertical-align: middle; border: 1px solid #ddd; background: #faf5e8;" rowspan="${dayRowspan}">
+                ${row.day}
+              </td>
+            ` : ''}
+            <td style="padding: 6px 8px; text-align: center; font-weight: 600; font-family: monospace; border: 1px solid #000000; ${row.isBreak ? 'color: #b45309;' : ''}">
+              ${row.isBreak ? '' : row.period}
+            </td>
+            ${row.isBreak ? `
+              <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000; background: #fef3c7;" colspan="${uniqueClasses.length}">
+                <span style="font-size: 11px; font-weight: 700; color: #000000; text-transform: uppercase; letter-spacing: 1px;">BREAK TIME</span>
+              </td>
+            ` : uniqueClasses.map((c) => {
+          const cell = row.cells[c.className];
+          return `
+                <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000;">
+                  ${cell ? `
+                    <div style="font-weight: 500; font-size: ${cell.subjectName.includes('/') ? '10px' : '11px'};">${cell.subjectName}</div>
+                    <div style="font-size: 9px; color: #666;">${cell.teacherName}</div>
+                    ${cell.room ? `<div style="font-size: 8px; color: #999;">${cell.room}</div>` : ''}
+                  ` : '<span style="color: #ccc;">—</span>'}
+                </td>
+              `;
+        }).join('')}
+            <td style="padding: 6px 8px; text-align: center; font-size: 10px; border: 1px solid #ddd; white-space: nowrap;">
+              ${row.duration}
+            </td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+          </table>
+          <div style="text-align: center; margin-top: 8px; font-size: 9px; color: #999; border-top: 1px solid #eee; padding-top: 6px;">
+            Generated: ${new Date().toLocaleString()}
+          </div>
+        </div>
+      `;
+
+      container.innerHTML = htmlContent;
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        width: container.scrollWidth,
+        height: container.scrollHeight,
+        onclone: (_doc, element) => flattenUnsupportedColors(element),
+      });
+
+      const { default: jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const usableWidth = pageWidth - margin * 2;
+      const usableHeight = pageHeight - margin * 2;
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const imgWidth = usableWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      if (imgHeight <= usableHeight) {
+        pdf.addImage(imgData, 'JPEG', margin, margin, imgWidth, imgHeight);
+      } else {
+        let remainingHeight = imgHeight;
+        let offset = 0;
+        let isFirstPage = true;
+        while (remainingHeight > 0) {
+          if (!isFirstPage) pdf.addPage();
+          pdf.addImage(imgData, 'JPEG', margin, margin - offset, imgWidth, imgHeight);
+          remainingHeight -= usableHeight;
+          offset += usableHeight;
+          isFirstPage = false;
+        }
+      }
+
+      document.body.removeChild(container);
+      pdf.save(`timetable_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success("Timetable PDF downloaded");
+    } catch (error) {
+      console.error("Error downloading timetable PDF:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Failed to download PDF: ${message}`);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+
+  // ============================================
+  // PDF DOWNLOAD - MATRIX FORMAT
+  // ============================================
+
+  const downloadMatrixPDF = useCallback(async () => {
+    setIsDownloadingPdf(true);
+    try {
+      const res = await axios.get(`${API_BASE}/timetable`).catch(() => null);
+      const rawEntries = res?.data?.success ? res.data.data : null;
+      const freshEntries: TimetableEntry[] = rawEntries ? rawEntries.map(mapApiEntry) : entries;
+
+      if (freshEntries.length === 0) {
+        toast.error("No timetable entries to export");
+        return;
+      }
+
+      let filteredForExport = freshEntries;
+      if (filterClass) filteredForExport = filteredForExport.filter(e => e.classId === filterClass);
+      if (filterTeacher) filteredForExport = filteredForExport.filter(e => e.teacherId === filterTeacher);
+
+      const classIds = new Set(filteredForExport.map(e => e.classId));
+      const uniqueClasses = classes.filter(c => classIds.has(c._id));
+
+      const { matrix, days, timeSlots, labels, isBreak } = buildMatrixTimetable(filteredForExport, uniqueClasses);
+
+      const container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.top = '0';
+      container.style.left = '-9999px';
+      container.style.width = '1100px';
+      container.style.backgroundColor = 'white';
+      container.style.padding = '30px 20px';
+      container.style.zIndex = '9999';
+      document.body.appendChild(container);
+
+      const classNames = uniqueClasses.map(c =>
+        c.department ? `${c.className} ${c.department}` : c.className
+      ).join(', ');
+
+      let filterLabel = "";
+      if (filterClass) {
+        const cls = classes.find(c => c._id === filterClass);
+        filterLabel = cls ? ` - ${cls.department ? `${cls.className} ${cls.department}` : cls.className}` : "";
+      } else if (filterTeacher) {
+        const teacher = teachers.find(t => t._id === filterTeacher);
+        filterLabel = teacher ? ` - ${teacher.name}` : "";
+      } else {
+        filterLabel = classNames ? ` - ${classNames}` : "";
+      }
+
+      let htmlContent = `
+        <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
+          <div style="text-align: center; margin-bottom: 15px; border-bottom: 3px solid #000000; padding-bottom: 12px;">
+            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">BELMON BILINGUAL HIGH SCHOOL</h1>
+            <p style="font-size: 13px; color: #666; margin: 4px 0 0 0;">TIMETABLE • ${academicYear}</p>
+            <p style="font-size: 12px; color: #888; margin: 2px 0 0 0;">Classes: ${classNames || 'All Classes'}</p>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 11px; border: 2px solid #000000;">
+            <thead>
+              <tr style="background: #000000; color: white;">
+                <th style="padding: 10px 12px; text-align: center; border: 1px solid #ccc; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; min-width: 100px;">
+                  TIME
+                </th>
+                ${days.map((day: string) => `
+                  <th style="padding: 10px 12px; text-align: center; border: 1px solid #25231e; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; min-width: 100px;">
+                    ${day}
+                  </th>
+                `).join('')}
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      // Use the labels and isBreak from the matrix
+      const matrixLabels = labels;
+      const matrixIsBreak = isBreak;
+
+      timeSlots.forEach((slot: any, idx: number) => {
+        const isBreakRow = matrixIsBreak[idx] || false;
+        const label = matrixLabels[idx] || slot.label;
+        const displayLabel = isBreakRow ? 'BREAK' : label;
+
+        const rowBg = isBreakRow ? 'background: #fef3c7;' : (idx % 2 === 0 ? 'background: #fafafa;' : 'background: white;');
+
+        htmlContent += `
+          <tr style="${rowBg}">
+            <td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; font-weight: 700; font-size: 12px; ${isBreakRow ? 'color: #b45309; background: #fef3c7;' : ''}">
+              <div style="font-size: 13px; font-weight: 800;">${displayLabel}</div>
+              ${!isBreakRow ? `<div style="font-size: 9px; color: #000000; font-weight: 400;">${slot.start} - ${slot.end}</div>` : ''}
+            </td>
+            ${days.map((day: string) => {
+          const slotData = matrix[day]?.[slot.start];
+          if (!slotData || slotData.entries.length === 0) {
+            return `<td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; ${isBreakRow ? 'background: #fef3c7;' : ''}">
+                  <span style="color: #000000; font-size: 14px;">-</span>
+                </td>`;
+          }
+          if (isBreakRow) {
+            return `<td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; background: #fef3c7; color: #000000; font-weight: 700; font-size: 11px; letter-spacing: 1px;">
+                  BREAK
+                </td>`;
+          }
+
+          const entriesHtml = slotData.entries.map((entry: any) => {
+            const classObj = classes.find(c => c._id === entry.classId);
+            const fullClassName = classObj?.department ? `${classObj.className} ${classObj.department}` : entry.className;
+
+            return `
+                  <div style="padding: 4px 0; last-child: border-bottom: none;">
+                    <div style="font-weight: 600; font-size: ${entry.subjectName.includes('/') ? '11px' : '12px'}; color: #1a1a1a;">${entry.subjectName}</div>
+                    <div style="font-size: 9px; color: #000000; margin-top: 1px;">${entry.teacherName}</div>
+                  </div>
+                `;
+          }).join('');
+
+          return `<td style="padding: 6px 8px; text-align: center; border: 1px solid #000000; vertical-align: middle;">
+                ${entriesHtml}
+              </td>`;
+        }).join('')}
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+          </table>
+
+          <div style="text-align: center; margin-top: 12px; font-size: 9px; color: #000000; border-top: 1px solid #000000; padding-top: 10px;">
+            <span>Generated: ${new Date().toLocaleString()}</span>
+            <span style="margin: 0 15px;">|</span>
+            <span>BELMON BILINGUAL HIGH SCHOOL</span>
+            <span style="margin: 0 15px;">|</span>
+            <span>Page 1 of 1</span>
+          </div>
+        </div>
+      `;
+
+      container.innerHTML = htmlContent;
+      await new Promise(resolve => setTimeout(resolve, 400));
+
+      const canvas = await html2canvas(container, {
+        scale: 2.5,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        width: container.scrollWidth,
+        height: container.scrollHeight,
+        onclone: (_doc, element) => flattenUnsupportedColors(element),
+      });
+
+      const { default: jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const usableWidth = pageWidth - margin * 2;
+      const usableHeight = pageHeight - margin * 2;
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.98);
+      const imgWidth = usableWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      if (imgHeight <= usableHeight) {
+        const yOffset = (usableHeight - imgHeight) / 2;
+        pdf.addImage(imgData, 'JPEG', margin, margin + yOffset, imgWidth, imgHeight);
+      } else {
+        let remainingHeight = imgHeight;
+        let offset = 0;
+        let isFirstPage = true;
+        while (remainingHeight > 0) {
+          if (!isFirstPage) pdf.addPage();
+          pdf.addImage(imgData, 'JPEG', margin, margin - offset, imgWidth, imgHeight);
+          remainingHeight -= usableHeight;
+          offset += usableHeight;
+          isFirstPage = false;
+        }
+      }
+
+      document.body.removeChild(container);
+      pdf.save(`timetable_matrix_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success("Matrix timetable PDF downloaded");
+    } catch (error) {
+      console.error("Error downloading matrix PDF:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Failed to download PDF: ${message}`);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+
+  // ============================================
+  // PDF DOWNLOAD - PAGINATED
+  // ============================================
+
+  const downloadPaginatedPDF = useCallback(async () => {
+    setIsDownloadingPdf(true);
+    try {
+      const res = await axios.get(`${API_BASE}/timetable`).catch(() => null);
+      const rawEntries = res?.data?.success ? res.data.data : null;
+      const freshEntries: TimetableEntry[] = rawEntries ? rawEntries.map(mapApiEntry) : entries;
+
+      if (freshEntries.length === 0) {
+        toast.error("No timetable entries to export");
+        return;
+      }
+
+      let filteredForExport = freshEntries;
+      if (filterClass) filteredForExport = filteredForExport.filter(e => e.classId === filterClass);
+      if (filterTeacher) filteredForExport = filteredForExport.filter(e => e.teacherId === filterTeacher);
+
+      if (filteredForExport.length === 0) {
+        toast.error("No entries found for the selected filter");
+        return;
+      }
+
+      const classNamesSet = new Set<string>();
+      filteredForExport.forEach(e => {
+        classNamesSet.add(e.className);
+      });
+      const uniqueClassNames = Array.from(classNamesSet).sort();
+
+      const pageGrids = buildPaginatedPdfGrids(filteredForExport, []);
+
+      const container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.top = '0';
+      container.style.left = '-9999px';
+      container.style.width = '1100px';
+      container.style.backgroundColor = 'white';
+      container.style.padding = '20px';
+      container.style.zIndex = '9999';
+      document.body.appendChild(container);
+
+      const { default: jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const usableWidth = pageWidth - margin * 2;
+      const usableHeight = pageHeight - margin * 2;
+
+      const classNamesHeader = uniqueClassNames.join(', ');
+
+      let filterLabel = "";
+      if (filterClass) {
+        const cls = classes.find(c => c._id === filterClass);
+        filterLabel = cls ? ` - ${cls.className}` : "";
+      } else if (filterTeacher) {
+        const teacher = teachers.find(t => t._id === filterTeacher);
+        filterLabel = teacher ? ` - ${teacher.name}` : "";
+      } else {
+        filterLabel = classNamesHeader ? ` - ${classNamesHeader}` : "";
+      }
+
+      for (let pageIndex = 0; pageIndex < pageGrids.length; pageIndex++) {
+        const gridRows = pageGrids[pageIndex];
+        const pageLabel = pageIndex === 0 ? "Monday - Wednesday" : "Thursday - Friday";
+
+        const pageClassNames = new Set<string>();
+        gridRows.forEach(row => {
+          Object.keys(row.cells).forEach(cls => pageClassNames.add(cls));
+        });
+        const pageClassList = Array.from(pageClassNames).sort();
+
+        let htmlContent = `
+          <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
+            <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000000; padding-bottom: 8px;">
+              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">BELMON BILINGUAL HIGH SCHOOL</h2>
+              <p style="font-size: 11px; font-weight:bold; color: #000000; margin: 3px 0;">Timetable • ${academicYear}${filterLabel} • ${pageLabel}</p>
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+              <thead>
+                <tr style="background: #000000; color: white;">
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
+                  ${pageClassList.map((cls) => `
+                    <th style="padding: 6px 8px; text-align: center; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">${cls}</th>
+                  `).join('')}
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;
+
+        gridRows.forEach((row, index) => {
+          const isFirstOfDay = index === 0 || gridRows[index - 1].day !== row.day;
+          const dayRowspan = gridRows.filter((r) => r.day === row.day).length;
+
+          htmlContent += `
+            <tr style="${row.isBreak ? 'background: #fef3c7;' : ''}">
+              ${isFirstOfDay ? `
+                <td style="padding: 6px 8px; font-weight: 600; text-align: center; vertical-align: middle; font-weight:bold; border: 1px solid #000000; background: #faf5e8;" rowspan="${dayRowspan}">
+                  ${row.day}
+                </td>
+              ` : ''}
+
+              ${row.isBreak ? `
+                <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000; background: #fef3c7;" colspan="${pageClassList.length}">
+                  <span style="font-size: 11px; font-weight: bold; color: #000000;  text-transform: uppercase; letter-spacing: 1px;">BREAK TIME</span>
+                </td>
+              ` : pageClassList.map((cls) => {
+            const cell = row.cells[cls];
+            return `
+                  <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000;">
+                    ${cell ? `
+                      <div style="font-weight: 500; font-size: ${cell.subjectName.includes('/') ? '10px' : '11px'};">${cell.subjectName}</div>
+                      <div style="font-size: 9px; color: #000000; font-weight: bold;">${cell.teacherName}</div>
+                    ` : '<span style="color: #000000;">—</span>'}
+                  </td>
+                `;
+          }).join('')}
+              <td style="padding: 6px 8px; text-align: center; font-size: 10px; border: 1px solid #000000; white-space: nowrap;">
+                ${row.duration}
+              </td>
+            </tr>
+          `;
+        });
+
+        htmlContent += `
+              </tbody>
+            </table>
+            <div style="text-align: center; margin-top: 8px; font-size: 9px; color: #999; border-top: 1px solid #eee; padding-top: 6px;">
+              Generated: ${new Date().toLocaleString()} • Page ${pageIndex + 1} of ${pageGrids.length}
+            </div>
+          </div>
+        `;
+
+        container.innerHTML = htmlContent;
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        const canvas = await html2canvas(container, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          logging: false,
+          width: container.scrollWidth,
+          height: container.scrollHeight,
+          onclone: (_doc, element) => flattenUnsupportedColors(element),
+        });
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        const imgWidth = usableWidth;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+        if (pageIndex > 0) pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', margin, margin, imgWidth, Math.min(imgHeight, usableHeight));
+      }
+
+      document.body.removeChild(container);
+      pdf.save(`timetable_paginated_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success("Paginated timetable PDF downloaded");
+    } catch (error) {
+      console.error("Error downloading paginated PDF:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Failed to download PDF: ${message}`);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+
+  // ============================================
+  // RENDER
   // ============================================
 
   if (loading) {
@@ -672,6 +1934,36 @@ export function TimetableAdminPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <select
+            value={filterClass}
+            onChange={(e) => {
+              setFilterClass(e.target.value);
+              setFilterTeacher("");
+            }}
+            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium min-w-[140px]"
+          >
+            <option value="">All Classes</option>
+            {uniqueClasses.map((c) => (
+              <option key={c._id} value={c._id}>
+                {c.department ? `${c.className} ${c.department}` : c.className}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={filterTeacher}
+            onChange={(e) => {
+              setFilterTeacher(e.target.value);
+              setFilterClass("");
+            }}
+            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium min-w-[140px]"
+          >
+            <option value="">All Teachers</option>
+            {teachers.map((t) => (
+              <option key={t._id} value={t._id}>{t.name}</option>
+            ))}
+          </select>
+
           <button
             onClick={() => setShowBulkModal(true)}
             disabled={isSaving}
@@ -679,12 +1971,18 @@ export function TimetableAdminPage() {
           >
             <Upload className="size-4" /> Bulk Add
           </button>
-          <button
+                    <button
             onClick={() => setShowCopyModal(true)}
             disabled={isSaving}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all disabled:opacity-50"
           >
             <Copy className="size-4" /> Copy Year
+          </button>
+          <button
+            onClick={() => setShowSetupWizard(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-amber-200 text-amber-700 text-sm font-semibold hover:bg-amber-50 transition-all"
+          >
+            <Calendar className="size-4" /> Auto-Generate
           </button>
           <button
             onClick={exportToCSV}
@@ -698,6 +1996,44 @@ export function TimetableAdminPage() {
           >
             <Printer className="size-4" /> Print
           </button>
+
+          <div className="relative group">
+            <button
+              onClick={downloadStandardPDF}
+              disabled={isDownloadingPdf}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition-all disabled:opacity-50 shadow-lg shadow-brand/20"
+            >
+              {isDownloadingPdf ? <span className="animate-spin"><Download className="size-4" /></span> : <Download className="size-4" />}
+              {isDownloadingPdf ? "Generating..." : "Download PDF"}
+            </button>
+            <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl border border-stone-200 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+              <button
+                onClick={downloadStandardPDF}
+                disabled={isDownloadingPdf}
+                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-t-xl flex items-center gap-2"
+              >
+                <FileSpreadsheet className="size-4" />
+                Standard Format (Day x Class)
+              </button>
+              <button
+                onClick={downloadMatrixPDF}
+                disabled={isDownloadingPdf}
+                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 flex items-center gap-2"
+              >
+                <LayoutGrid className="size-4" />
+                Matrix Format (Time x Day)
+              </button>
+              <button
+                onClick={downloadPaginatedPDF}
+                disabled={isDownloadingPdf}
+                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-b-xl flex items-center gap-2"
+              >
+                <CalendarDays className="size-4" />
+                Paginated (Mon-Wed / Thu-Fri)
+              </button>
+            </div>
+          </div>
+
           <button
             onClick={() => setShowAddModal(true)}
             disabled={isSaving}
@@ -708,35 +2044,30 @@ export function TimetableAdminPage() {
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {(filterClass || filterTeacher) && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800 flex items-center justify-between">
+          <span>
+            {filterClass && `Viewing: ${classes.find(c => c._id === filterClass)?.department ? `${classes.find(c => c._id === filterClass)?.className} ${classes.find(c => c._id === filterClass)?.department}` : classes.find(c => c._id === filterClass)?.className || 'Class'}`}
+            {filterTeacher && `Viewing: ${teachers.find(t => t._id === filterTeacher)?.name || 'Teacher'}`}
+          </span>
+          <button onClick={clearFilters} className="text-blue-600 hover:text-blue-800 font-medium">
+            <X className="size-4 inline" /> Clear Filter
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-        <div className="bg-white rounded-2xl border border-stone-200 p-4">
-          <p className="text-xs text-black/40 font-medium uppercase tracking-wider">Total Periods</p>
-          <p className="text-2xl font-bold mt-1">{stats.totalPeriods}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-stone-200 p-4">
-          <p className="text-xs text-black/40 font-medium uppercase tracking-wider">Teachers</p>
-          <p className="text-2xl font-bold mt-1">{stats.totalTeachers}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-stone-200 p-4">
-          <p className="text-xs text-black/40 font-medium uppercase tracking-wider">Classes</p>
-          <p className="text-2xl font-bold mt-1">{stats.totalClasses}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-stone-200 p-4">
-          <p className="text-xs text-black/40 font-medium uppercase tracking-wider">1st Cycle</p>
-          <p className="text-2xl font-bold text-blue-600 mt-1">{stats.firstCyclePeriods}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-stone-200 p-4">
-          <p className="text-xs text-black/40 font-medium uppercase tracking-wider">2nd Cycle</p>
-          <p className="text-2xl font-bold text-purple-600 mt-1">{stats.secondCyclePeriods}</p>
-        </div>
+        <StatCard label="Total Periods" value={filteredEntries.length} />
+        <StatCard label="Teachers" value={stats.totalTeachers} />
+        <StatCard label="Classes" value={stats.totalClasses} />
+        <StatCard label="1st Cycle" value={stats.firstCyclePeriods} valueClassName="text-blue-600" />
+        <StatCard label="2nd Cycle" value={stats.secondCyclePeriods} valueClassName="text-purple-600" />
         <div className="bg-white rounded-2xl border border-brand/20 p-4 bg-brand/5">
           <p className="text-xs text-brand/60 font-medium uppercase tracking-wider">Potential Revenue</p>
           <p className="text-2xl font-bold text-brand mt-1">{stats.totalPotential.toLocaleString()} FRS</p>
         </div>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
@@ -763,7 +2094,7 @@ export function TimetableAdminPage() {
           className="px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand min-w-[150px]"
         >
           <option value="">All Teachers</option>
-          {teachers.map(t => (
+          {teachers.map((t) => (
             <option key={t._id} value={t._id}>{t.name}</option>
           ))}
         </select>
@@ -774,8 +2105,10 @@ export function TimetableAdminPage() {
           className="px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand min-w-[150px]"
         >
           <option value="">All Classes</option>
-          {classes.map(c => (
-            <option key={c._id} value={c._id}>{c.className + " " + c.department}</option>
+          {uniqueClasses.map((c) => (
+            <option key={c._id} value={c._id}>
+              {c.department ? `${c.className} ${c.department}` : c.className}
+            </option>
           ))}
         </select>
 
@@ -785,7 +2118,7 @@ export function TimetableAdminPage() {
           className="px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand min-w-[130px]"
         >
           <option value="">All Days</option>
-          {days.map(d => (
+          {DAYS.map((d) => (
             <option key={d} value={d}>{d}</option>
           ))}
         </select>
@@ -821,15 +2154,9 @@ export function TimetableAdminPage() {
           </button>
         </div>
 
-        {(selectedTeacher || selectedClass || selectedDay || selectedCycle || searchTerm) && (
+        {hasActiveFilters && (
           <button
-            onClick={() => {
-              setSelectedTeacher("");
-              setSelectedClass("");
-              setSelectedDay("");
-              setSelectedCycle("");
-              setSearchTerm("");
-            }}
+            onClick={clearFilters}
             className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm hover:bg-stone-50 transition whitespace-nowrap"
           >
             <X className="size-4 inline mr-1" /> Clear
@@ -837,62 +2164,56 @@ export function TimetableAdminPage() {
         )}
       </div>
 
-      {/* View Content */}
       {viewMode === "table" && (
         <TableView
-          entries={filteredEntries}
-          onEdit={(entry) => setEditingEntry(entry)}
+          entries={combineMultiSubjectEntries(filteredEntries)}
+          onEdit={handleEditRequest}
           onDelete={handleDeleteEntry}
           canEdit={true}
         />
       )}
-
       {viewMode === "grid" && (
         <GridView
-          entries={filteredEntries}
-          onEdit={(entry) => setEditingEntry(entry)}
+          entries={combineMultiSubjectEntries(filteredEntries)}
+          onEdit={handleEditRequest}
           onDelete={handleDeleteEntry}
         />
       )}
-
       {viewMode === "calendar" && (
         <CalendarView
-          entries={filteredEntries}
-          days={days}
-          onEdit={(entry) => setEditingEntry(entry)}
+          entries={combineMultiSubjectEntries(filteredEntries)}
+          onEdit={handleEditRequest}
         />
       )}
 
-      {/* Modals */}
       {(showAddModal || editingEntry) && (
         <TimetableEntryModal
-          initial={editingEntry || {
-            id: `entry_${Date.now()}`,
-            teacherId: "",
-            teacherName: "",
-            classId: "",
-            className: "",
-            subjectId: "",
-            subjectName: "",
-            subjectCode: "",
-            day: "Monday",
-            startTime: "08:00",
-            endTime: "09:00",
-            periodNumber: 1,
-            cycle: "first",
-            ratePerPeriod: 500,
-            room: "",
-            academicYear: academicYear,
-            isActive: true
-          }}
+          initial={
+            editingEntry || {
+              id: `entry_${Date.now()}`,
+              teacherId: "",
+              teacherName: "",
+              classId: "",
+              className: "",
+              subjectId: "",
+              subjectName: "",
+              subjectCode: "",
+              day: "Monday",
+              startTime: "08:00",
+              endTime: "09:00",
+              periodNumber: 1,
+              cycle: "first",
+              ratePerPeriod: CYCLE_RATES.first,
+              room: "",
+              academicYear: academicYear,
+              isActive: true,
+            }
+          }
           teachers={teachers}
           classes={classes}
           subjects={subjects}
           onSave={handleSaveEntry}
-          onCancel={() => {
-            setEditingEntry(null);
-            setShowAddModal(false);
-          }}
+          onCancel={closeEntryModal}
         />
       )}
 
@@ -901,17 +2222,27 @@ export function TimetableAdminPage() {
           teachers={teachers}
           classes={classes}
           subjects={subjects}
-          days={days}
           onSave={handleBulkAdd}
           onCancel={() => setShowBulkModal(false)}
         />
       )}
 
-      {showCopyModal && (
-        <CopyYearModal
-          currentYear={academicYear}
-          onCopy={handleCopyFromPrevious}
-          onCancel={() => setShowCopyModal(false)}
+            {showCopyModal && (
+        <CopyYearModal currentYear={academicYear} onCopy={handleCopyFromPrevious} onCancel={() => setShowCopyModal(false)} />
+      )}
+
+      {showSetupWizard && (
+        <SetupWizard
+          teachers={activeTeachers}
+          subjects={subjects}
+          classes={classes}
+          schoolSettings={schoolSettings}
+          isGenerating={isGenerating}
+          generateConflicts={generateConflicts}
+          onSaveTeacherAvailability={saveTeacherAvailability}
+          onSaveSchoolSettings={saveSchoolSettings}
+          onGenerate={handleGenerateTimetable}
+          onCancel={() => setShowSetupWizard(false)}
         />
       )}
     </div>
@@ -922,7 +2253,12 @@ export function TimetableAdminPage() {
 // TABLE VIEW
 // ============================================
 
-function TableView({ entries, onEdit, onDelete, canEdit }: {
+const TableView = memo(function TableView({
+  entries,
+  onEdit,
+  onDelete,
+  canEdit,
+}: {
   entries: TimetableEntry[];
   onEdit: (entry: TimetableEntry) => void;
   onDelete: (id: string) => void;
@@ -973,33 +2309,23 @@ function TableView({ entries, onEdit, onDelete, canEdit }: {
                       {entry.subjectCode && (
                         <span className="text-xs bg-stone-100 px-1.5 py-0.5 rounded font-mono">{entry.subjectCode}</span>
                       )}
-                      {entry.subjectName}
+                      <span className={entry.subjectName.includes('/') ? 'text-amber-700 font-semibold' : ''}>
+                        {entry.subjectName}
+                      </span>
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-1 rounded-full font-bold ${
-                      entry.cycle === "first" 
-                        ? "bg-blue-100 text-blue-700" 
-                        : "bg-purple-100 text-purple-700"
-                    }`}>
-                      {entry.cycle === "first" ? "1st Cycle" : "2nd Cycle"}
-                    </span>
+                    <CycleBadge cycle={entry.cycle} />
                   </td>
                   <td className="px-4 py-3 text-sm font-bold text-brand">{entry.ratePerPeriod} FRS</td>
                   <td className="px-4 py-3 text-sm">{entry.room || "-"}</td>
                   {canEdit && (
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => onEdit(entry)}
-                          className="p-1.5 rounded-lg hover:bg-stone-100 text-black/60 transition"
-                        >
+                        <button onClick={() => onEdit(entry)} className="p-1.5 rounded-lg hover:bg-stone-100 text-black/60 transition">
                           <Pencil className="size-4" />
                         </button>
-                        <button
-                          onClick={() => onDelete(entry.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition"
-                        >
+                        <button onClick={() => onDelete(entry.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition">
                           <Trash2 className="size-4" />
                         </button>
                       </div>
@@ -1014,18 +2340,22 @@ function TableView({ entries, onEdit, onDelete, canEdit }: {
       {entries.length > 0 && (
         <div className="px-4 py-3 border-t border-stone-200 text-sm text-black/40 flex justify-between items-center">
           <span>Showing {entries.length} entries</span>
-          <span>Academic Year: {entries[0]?.academicYear || "2024-2025"}</span>
+          <span>Academic Year: {entries[0]?.academicYear || "2026-2027"}</span>
         </div>
       )}
     </div>
   );
-}
+});
 
 // ============================================
 // GRID VIEW
 // ============================================
 
-function GridView({ entries, onEdit, onDelete }: {
+const GridView = memo(function GridView({
+  entries,
+  onEdit,
+  onDelete,
+}: {
   entries: TimetableEntry[];
   onEdit: (entry: TimetableEntry) => void;
   onDelete: (id: string) => void;
@@ -1051,21 +2381,15 @@ function GridView({ entries, onEdit, onDelete }: {
                 </div>
               </div>
               <div className="flex gap-1">
-                <button
-                  onClick={() => onEdit(entry)}
-                  className="p-1.5 rounded-lg hover:bg-stone-100 text-black/60 transition"
-                >
+                <button onClick={() => onEdit(entry)} className="p-1.5 rounded-lg hover:bg-stone-100 text-black/60 transition">
                   <Pencil className="size-4" />
                 </button>
-                <button
-                  onClick={() => onDelete(entry.id)}
-                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition"
-                >
+                <button onClick={() => onDelete(entry.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition">
                   <Trash2 className="size-4" />
                 </button>
               </div>
             </div>
-            
+
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 <User className="size-4 text-black/40" />
@@ -1077,7 +2401,9 @@ function GridView({ entries, onEdit, onDelete }: {
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <BookOpen className="size-4 text-black/40" />
-                <span>{entry.subjectName}</span>
+                <span className={entry.subjectName.includes('/') ? 'text-amber-700 font-semibold' : ''}>
+                  {entry.subjectName}
+                </span>
               </div>
               {entry.room && (
                 <div className="flex items-center gap-2 text-sm">
@@ -1086,20 +2412,667 @@ function GridView({ entries, onEdit, onDelete }: {
                 </div>
               )}
             </div>
-            
+
             <div className="mt-3 pt-3 border-t border-stone-100 flex items-center justify-between">
-              <span className={`text-xs px-2 py-1 rounded-full font-bold ${
-                entry.cycle === "first" 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "bg-purple-100 text-purple-700"
-              }`}>
-                {entry.cycle === "first" ? "1st Cycle" : "2nd Cycle"}
-              </span>
+              <CycleBadge cycle={entry.cycle} />
               <span className="font-bold text-brand">{entry.ratePerPeriod} FRS/period</span>
             </div>
           </div>
         ))
       )}
+    </div>
+  );
+});
+
+// ============================================
+// Auto-Generate Setup Wizard
+// ============================================
+
+// Shape of one entry in the conflict report returned by POST /api/timetable/generate
+interface GenerateConflict {
+  className?: string;
+  subjectName?: string;
+  teacherName?: string | null;
+  requestedPeriods?: number;
+  placedPeriods?: number;
+  reason?: string;
+}
+
+interface SetupWizardProps {
+  teachers: {
+    _id: string;
+    name: string;
+    email?: string;
+    qualification?: string;
+    subjectIds?: string[];
+    classIds?: string[];
+    isPermanent?: boolean;
+    availableDays?: string[];
+  }[];
+  subjects: Subject[];
+  classes: Class[];
+  schoolSettings: SchoolSettings;
+  isGenerating: boolean;
+  generateConflicts: GenerateConflict[];
+  onSaveTeacherAvailability: (teacherId: string, isPermanent: boolean, availableDays: string[]) => Promise<boolean>;
+  onSaveSchoolSettings: (settings: Omit<SchoolSettings, "_id">) => Promise<boolean>;
+  onGenerate: () => Promise<void>;
+  onCancel: () => void;
+}
+
+interface LocalSettings {
+  schoolStartTime: string;
+  schoolEndTime: string;
+  breakStart: string;
+  breakEnd: string;
+  periodDurationMinutes: number;
+  schoolDays: string[];
+  periodsPerDay: number;
+}
+
+const timeStringToMinutes = (t: string): number => {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+};
+
+export function SetupWizard({
+  teachers,
+  subjects,
+  classes,
+  schoolSettings,
+  isGenerating,
+  generateConflicts,
+  onSaveTeacherAvailability,
+  onSaveSchoolSettings,
+  onGenerate,
+  onCancel,
+}: SetupWizardProps) {
+  const [activeTab, setActiveTab] = useState<"teachers" | "schedule" | "generate">("teachers");
+  const [teacherState, setTeacherState] = useState<Record<string, { isPermanent: boolean; availableDays: string[] }>>({});
+  const [settings, setSettings] = useState<LocalSettings>({
+    schoolStartTime: schoolSettings.schoolStartTime || "08:00",
+    schoolEndTime: schoolSettings.schoolEndTime || "14:00",
+    breakStart: schoolSettings.breakStart || "10:15",
+    breakEnd: schoolSettings.breakEnd || "10:30",
+    periodDurationMinutes: schoolSettings.periodDurationMinutes || 45,
+    schoolDays: (schoolSettings.schoolDays as string[])?.length
+      ? (schoolSettings.schoolDays as string[])
+      : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    periodsPerDay: schoolSettings.periodsPerDay || 6,
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    // Merge-init: only fill in teachers that have no local state yet, so the
+    // optimistic parent update (after each save) never wipes in-progress edits.
+    // Teachers with no saved availability config default to "available all
+    // days" — otherwise the backend generator (isTeacherAvailable) silently
+    // excludes them from every slot.
+    setTeacherState((prev) => {
+      const next = { ...prev };
+      teachers.forEach((t) => {
+        if (next[t._id]) return;
+        const hasConfig =
+          !!t.isPermanent ||
+          (Array.isArray(t.availableDays) && t.availableDays.length > 0);
+        next[t._id] = hasConfig
+          ? {
+              isPermanent: !!t.isPermanent,
+              availableDays: t.isPermanent ? [...DAYS] : [...(t.availableDays || [])],
+            }
+          : { isPermanent: true, availableDays: [...DAYS] };
+      });
+      return next;
+    });
+  }, [teachers]);
+
+  const set = <K extends keyof LocalSettings>(k: K, v: LocalSettings[K]) =>
+    setSettings((s) => ({ ...s, [k]: v }));
+
+  const computedPeriods = useMemo(() => {
+    const start = timeStringToMinutes(settings.schoolStartTime);
+    const end = timeStringToMinutes(settings.schoolEndTime);
+    const brkS = timeStringToMinutes(settings.breakStart);
+    const brkE = timeStringToMinutes(settings.breakEnd);
+    const dur = settings.periodDurationMinutes;
+    let count = 0, cursor = start, periodNum = 1;
+    while (cursor + dur <= end && periodNum <= (settings.periodsPerDay || 20)) {
+      const s = cursor, e = cursor + dur;
+      if (!(s < brkE && e > brkS)) { count += 1; periodNum += 1; }
+      cursor = e;
+    }
+        return count;
+  }, [settings]);
+
+  // ---- Save handlers ----
+  const handleSaveTeacherAvailability = async () => {
+    setSaving(true);
+    let ok = true;
+    // Compare with a stable day order so chip-toggle ordering never causes
+    // spurious saves, and genuinely unconfigured teachers always diff.
+    const sortDays = (days: string[]) => [...days].sort();
+    for (const t of teachers) {
+      // Fall back to the wizard default (permanent, all days) instead of
+      // skipping — a missing entry must never silently exclude the teacher.
+      const ts = teacherState[t._id] || { isPermanent: true, availableDays: [...DAYS] };
+      const original = {
+        isPermanent: !!t.isPermanent,
+        availableDays: Array.isArray(t.availableDays) ? sortDays(t.availableDays) : [],
+      };
+      const changed =
+        ts.isPermanent !== original.isPermanent ||
+        JSON.stringify(sortDays(ts.availableDays)) !== JSON.stringify(original.availableDays);
+      if (changed) {
+        const result = await onSaveTeacherAvailability(t._id, ts.isPermanent, ts.availableDays);
+        if (!result) ok = false;
+      }
+    }
+    setSaving(false);
+    if (ok) {
+      toast.success("Teacher availability saved");
+      setActiveTab("schedule");
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSaving(true);
+        const ok = await onSaveSchoolSettings({
+      schoolStartTime: settings.schoolStartTime,
+      schoolEndTime: settings.schoolEndTime,
+      breakStart: settings.breakStart,
+      breakEnd: settings.breakEnd,
+      periodDurationMinutes: settings.periodDurationMinutes,
+      schoolDays: settings.schoolDays,
+      periodsPerDay: settings.periodsPerDay,
+    });
+    setSaving(false);
+    if (ok) {
+      toast.success("Schedule settings saved");
+      setActiveTab("generate");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="p-6 border-b border-stone-200">
+          <h2 className="font-display text-2xl font-bold text-[#121212]">
+            Auto-Generate Timetable
+          </h2>
+          <p className="text-sm text-black/60 mt-1">
+            Step 1: Teacher availability. Step 2: School schedule. Step 3: Generate.
+          </p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-stone-200 px-6 bg-stone-50">
+          {(["teachers", "schedule", "generate"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => tab !== "teachers" && setActiveTab(tab)}
+              disabled={tab === "teachers" ? false : activeTab === "teachers"}
+              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                activeTab === tab
+                  ? "border-brand text-brand"
+                  : "border-transparent text-black/40 hover:text-black cursor-pointer"
+              }`}
+            >
+              {tab === "teachers" ? "Teacher Availability" : tab === "schedule" ? "School Schedule" : "Generate"}
+            </button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === "teachers" && (
+            <TeacherAvailabilityTab
+              teachers={teachers}
+              teacherState={teacherState}
+              setTeacherState={setTeacherState}
+              onSave={handleSaveTeacherAvailability}
+              saving={saving}
+            />
+          )}
+          {activeTab === "schedule" && (
+            <ScheduleSettingsTab
+              settings={settings}
+              set={set}
+              computedPeriods={computedPeriods}
+              onSave={handleSaveSettings}
+              onBack={() => setActiveTab("teachers")}
+              saving={saving}
+            />
+          )}
+          {activeTab === "generate" && (
+            <GenerateTab
+              teachers={teachers}
+              subjects={subjects}
+              classes={classes}
+              computedPeriods={computedPeriods}
+              isGenerating={isGenerating}
+              conflicts={generateConflicts}
+              onGenerate={onGenerate}
+              onBack={() => setActiveTab("schedule")}
+            />
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-stone-200 bg-stone-50 flex justify-end rounded-b-2xl">
+          <button
+            onClick={onCancel}
+            disabled={isGenerating}
+            className="px-4 py-2 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+        </div>
+  );
+}
+
+// ============================================
+// Sub-components for the Setup Wizard
+// ============================================
+
+function TeacherAvailabilityTab({
+  teachers,
+  teacherState,
+  setTeacherState,
+  onSave,
+  saving,
+}: {
+  teachers: SetupWizardProps["teachers"];
+  teacherState: Record<string, { isPermanent: boolean; availableDays: string[] }>;
+  setTeacherState: React.Dispatch<React.SetStateAction<Record<string, { isPermanent: boolean; availableDays: string[] }>>>;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const toggleDay = (teacherId: string, day: string) => {
+    setTeacherState((prev) => {
+      // Create the entry if missing so toggles always work, even if the init
+      // effect has not run yet — this default matches the row/counter fallback.
+      const current = prev[teacherId] || { isPermanent: false, availableDays: [...DAYS] };
+      const newAvailable = current.availableDays.includes(day)
+        ? current.availableDays.filter((d) => d !== day)
+        : [...current.availableDays, day];
+      return { ...prev, [teacherId]: { ...current, availableDays: newAvailable } };
+    });
+  };
+
+  const togglePermanent = (teacherId: string) => {
+    setTeacherState((prev) => {
+      const current = prev[teacherId] || { isPermanent: true, availableDays: [...DAYS] };
+      const makingPermanent = !current.isPermanent;
+      return {
+        ...prev,
+        [teacherId]: {
+          isPermanent: makingPermanent,
+          // Unticking Permanent pre-checks Mon–Fri so a teacher is never left
+          // with zero available days (which reads as "unconfigured" downstream).
+          availableDays: makingPermanent ? [...DAYS] : [...DAYS].slice(0, 5),
+        },
+      };
+    });
+  };
+
+  // Same fallback as the row rendering below, so the counter can never disagree
+  // with what the rows show when teacherState has not been populated yet.
+  const permanentCount = teachers.filter(
+    (t) => (teacherState[t._id] || { isPermanent: true }).isPermanent
+  ).length;
+  const customCount = teachers.length - permanentCount;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-xs text-black/50 font-bold uppercase">
+          {teachers.length} teachers found
+        </div>
+        <div className="text-xs text-black/40 font-medium">
+          {permanentCount} permanent • {customCount} custom days
+        </div>
+      </div>
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+        Teachers with no availability set default to <strong>available all days</strong> so they
+        are included in generation. Untick "Permanent" to pick specific days for a teacher.
+      </div>
+      {teachers.length === 0 ? (
+        <p className="text-sm text-black/50">No active teachers found. Add teachers first.</p>
+      ) : (
+        <div className="space-y-3">
+          {teachers.map((teacher) => {
+            const ts = teacherState[teacher._id] || { isPermanent: true, availableDays: [...DAYS] };
+            const isPerm = ts.isPermanent;
+            return (
+              <div key={teacher._id} className="border border-stone-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <div className="font-bold text-sm">{teacher.name}</div>
+                    <div className="text-xs text-black/50">{teacher.email}</div>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isPerm}
+                      onChange={() => togglePermanent(teacher._id)}
+                      className="w-4 h-4 rounded text-brand focus:ring-brand"
+                    />
+                    <span className="text-sm font-medium">Permanent (available all days)</span>
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {DAYS.map((day) => {
+                    const checked = isPerm || ts.availableDays.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => !isPerm && toggleDay(teacher._id, day)}
+                        disabled={isPerm}
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${
+                          checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 cursor-pointer hover:bg-stone-200"
+                        }`}
+                      >
+                        {day.slice(0, 3)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex justify-end pt-4 border-t border-stone-200">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save & Continue"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Sub-component: Schedule settings tab
+// ============================================
+
+function ScheduleSettingsTab({
+  settings,
+  set,
+  computedPeriods,
+  onSave,
+  onBack,
+  saving,
+}: {
+  settings: LocalSettings;
+  set: <K extends keyof LocalSettings>(k: K, v: LocalSettings[K]) => void;
+  computedPeriods: number;
+  onSave: () => void;
+  onBack: () => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="space-y-4">
+        <Field label="School Start Time*">
+          <input type="time" value={settings.schoolStartTime}
+            onChange={(e) => set("schoolStartTime", e.target.value)} className={inputCls} required />
+        </Field>
+        <Field label="School End Time*">
+          <input type="time" value={settings.schoolEndTime}
+            onChange={(e) => set("schoolEndTime", e.target.value)} className={inputCls} required />
+        </Field>
+        <Field label="Break Start*">
+          <input type="time" value={settings.breakStart}
+            onChange={(e) => set("breakStart", e.target.value)} className={inputCls} required />
+        </Field>
+        <Field label="Break End*">
+          <input type="time" value={settings.breakEnd}
+            onChange={(e) => set("breakEnd", e.target.value)} className={inputCls} required />
+        </Field>
+      </div>
+      <div className="space-y-4">
+        <Field label="Period Duration (minutes)*">
+          <input type="number" min={10} max={120}
+            value={settings.periodDurationMinutes}
+            onChange={(e) => set("periodDurationMinutes", Math.max(10, Math.min(120, Number(e.target.value))))}
+            className={inputCls} required />
+        </Field>
+        <Field label="Periods Per Day (max 12)*">
+          <input type="number" min={1} max={12}
+            value={settings.periodsPerDay}
+            onChange={(e) => set("periodsPerDay", Math.max(1, Math.min(12, Number(e.target.value))))}
+            className={inputCls} required />
+        </Field>
+        <Field label="School Days*">
+          <div className="flex flex-wrap gap-2">
+            {DAYS.map((day) => {
+              const checked = settings.schoolDays.includes(day);
+              return (
+                <button key={day} type="button"
+                  onClick={() => {
+                    const newDays = checked
+                      ? settings.schoolDays.filter((d) => d !== day)
+                      : [...settings.schoolDays, day];
+                    set("schoolDays", newDays);
+                  }}
+                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${
+                    checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"
+                  }`}>
+                  {day.slice(0, 3)}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+        <Field label="Preview">
+          <div className="p-3 bg-stone-50 rounded-lg text-sm">
+            <div>Periods per day (excluding breaks): <strong>{computedPeriods}</strong></div>
+            <div className="text-xs text-black/50 mt-1">
+              Based on {settings.schoolStartTime}–{settings.schoolEndTime} with a break
+              {settings.breakStart}–{settings.breakEnd} and {settings.periodDurationMinutes}min periods.
+            </div>
+          </div>
+        </Field>
+      </div>
+      <div className="md:col-span-2 flex justify-between items-center pt-4 border-t border-stone-200">
+        <button
+          onClick={onBack}
+          className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50"
+        >
+          Back
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save & Continue"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Sub-component: Generate tab
+// ============================================
+
+function GenerateTab({
+  teachers,
+  subjects,
+  classes,
+  computedPeriods,
+  isGenerating,
+  conflicts,
+  onGenerate,
+  onBack,
+}: {
+  teachers: SetupWizardProps["teachers"];
+  subjects: Subject[];
+  classes: Class[];
+  computedPeriods: number;
+  isGenerating: boolean;
+  conflicts: GenerateConflict[];
+  onGenerate: () => void;
+  onBack: () => void;
+}) {
+  const [showPlan, setShowPlan] = useState(false);
+
+  // Pre-flight check — mirrors the backend generator's eligibility rule
+  // (routes/timetable.js): a teacher only gets periods for a (subject, class)
+  // pair when the Subject lists that class AND the teacher's subjectIds AND
+  // classIds both include the pair. Being "permanent" (Step 1) only makes a
+  // teacher AVAILABLE — it never creates assignments.
+  const readiness = useMemo(() => {
+    return teachers.map((t) => {
+      let assignments = 0;
+      let weeklyPeriods = 0;
+      const tClassIds = (t.classIds || []).map(String);
+      const tSubjectIds = (t.subjectIds || []).map(String);
+      subjects.forEach((s) => {
+        const subjClassIds = (s.classIds || []).map(String);
+        classes.forEach((c) => {
+          const classId = String(c._id);
+          if (!subjClassIds.includes(classId)) return;
+          if (!tClassIds.includes(classId)) return;
+          if (!tSubjectIds.includes(String(s._id))) return;
+          assignments += 1;
+          weeklyPeriods += s.periodsPerWeek || 4;
+        });
+      });
+      return { teacher: t, assignments, weeklyPeriods };
+    });
+  }, [teachers, subjects, classes]);
+
+  const readyCount = readiness.filter((r) => r.assignments > 0).length;
+  const notReady = readiness.filter((r) => r.assignments === 0);
+
+  return (
+    <div className="space-y-5 py-4">
+      <div className="text-center">
+        <div className="size-16 bg-brand/10 rounded-full grid place-items-center mx-auto mb-4">
+          <Calendar className="size-8 text-brand" />
+        </div>
+        <h3 className="font-display text-xl font-bold mb-2">Ready to Generate</h3>
+        <p className="text-sm text-black/60 max-w-md mx-auto">
+          {readyCount} of {teachers.length} teachers will receive periods, based on their
+          subject &amp; class assignments, availability (Step 1) and the school schedule
+          (Step 2 — {computedPeriods} periods/day).
+        </p>
+      </div>
+
+      {notReady.length > 0 && (
+        <div className="max-w-2xl mx-auto bg-amber-50 border border-amber-300 rounded-xl p-4">
+          <p className="text-sm font-bold text-amber-800 flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" />
+            {notReady.length} teacher(s) will NOT receive any periods:
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {notReady.map((r) => (
+              <li key={r.teacher._id} className="text-sm text-amber-800">
+                <span className="font-semibold">{r.teacher.name}</span> — marked available,
+                but no subject/class assignment matches, so the generator has nothing to
+                schedule for them. Assign subjects &amp; classes to them first, then regenerate.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="max-w-2xl mx-auto">
+        <button
+          onClick={() => setShowPlan((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition"
+        >
+          <span className="flex items-center gap-2">
+            <Eye className="size-4 text-brand" />
+            View generation plan (periods per teacher)
+          </span>
+          <ChevronDown className={`size-4 transition-transform ${showPlan ? "rotate-180" : ""}`} />
+        </button>
+        {showPlan && (
+          <div className="mt-2 rounded-xl border border-stone-200 divide-y divide-stone-100 max-h-64 overflow-y-auto">
+            {readiness.map((r) => (
+              <div key={r.teacher._id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                <span className="font-medium">{r.teacher.name}</span>
+                {r.assignments > 0 ? (
+                  <span className="text-black/60">
+                    {r.assignments} assignment{r.assignments === 1 ? "" : "s"} · ≈{r.weeklyPeriods} periods/week
+                  </span>
+                ) : (
+                  <span className="text-amber-700 font-semibold">No assignments</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {conflicts.length > 0 && (
+        <div className="max-w-2xl mx-auto bg-red-50 border border-red-200 rounded-xl p-4 text-left">
+          <p className="text-sm font-bold text-red-800 flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" />
+            Last generation saved the timetable but could not place {conflicts.length}{" "}
+            subject/class slot{conflicts.length === 1 ? "" : "s"}:
+          </p>
+          <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+            {conflicts.map((c, i) => (
+              <li key={`${c.className}-${c.subjectName}-${i}`} className="text-xs text-red-700">
+                {c.className} — {c.subjectName}
+                {c.reason ? `: ${c.reason}` : ""}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-red-600 mt-2">
+            Increase periods/day (Step 2), reduce subject periods per week, or free up teacher
+            availability — then regenerate.
+          </p>
+        </div>
+      )}
+
+      <ul className="text-left max-w-md mx-auto space-y-2 text-sm text-black/70">
+        <li className="flex items-center gap-2">
+          <Check className="size-4 text-brand" /> {readyCount} teachers with subject/class
+          assignments, scheduled per their availability (Step 1)
+        </li>
+        <li className="flex items-center gap-2">
+          <Check className="size-4 text-brand" /> School schedule — {computedPeriods} periods/day (set in Step 2)
+        </li>
+        <li className="flex items-center gap-2">
+          <Check className="size-4 text-brand" /> Subject-to-class assignments and teacher mappings
+        </li>
+      </ul>
+
+      <div className="flex gap-3 justify-center pt-2">
+        <button
+          onClick={onBack}
+          className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50"
+        >
+          Back
+        </button>
+        <button
+          onClick={onGenerate}
+          disabled={isGenerating}
+          className="px-6 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50 flex items-center gap-2"
+        >
+          {isGenerating ? (
+            <>
+              <RefreshCw className="size-4 animate-spin" />
+              Generating...
+            </>
+          ) : (
+            "Generate Timetable"
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1108,17 +3081,23 @@ function GridView({ entries, onEdit, onDelete }: {
 // CALENDAR VIEW
 // ============================================
 
-function CalendarView({ entries, days, onEdit }: {
+const CalendarView = memo(function CalendarView({
+  entries,
+  onEdit,
+}: {
   entries: TimetableEntry[];
-  days: string[];
   onEdit: (entry: TimetableEntry) => void;
 }) {
-  const [currentWeek, setCurrentWeek] = useState(0);
-  const timeSlots = Array.from({ length: 8 }, (_, i) => `${8 + i}:00`);
-
-  const getEntriesForDayAndTime = (day: string, time: string) => {
-    return entries.filter(e => e.day === day && e.startTime === time);
-  };
+  const entriesByDayTime = useMemo(() => {
+    const map = new Map<string, TimetableEntry[]>();
+    entries.forEach((e) => {
+      const key = `${e.day}|${e.startTime}`;
+      const bucket = map.get(key);
+      if (bucket) bucket.push(e);
+      else map.set(key, [e]);
+    });
+    return map;
+  }, [entries]);
 
   return (
     <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
@@ -1127,27 +3106,13 @@ function CalendarView({ entries, days, onEdit }: {
           <CalendarDays className="size-5 text-brand" />
           Weekly Calendar View
         </h3>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setCurrentWeek(w => w - 1)}
-            className="p-2 rounded-lg hover:bg-stone-100 transition"
-          >
-            <ChevronLeft className="size-4" />
-          </button>
-          <button
-            onClick={() => setCurrentWeek(w => w + 1)}
-            className="p-2 rounded-lg hover:bg-stone-100 transition"
-          >
-            <ChevronRight className="size-4" />
-          </button>
-        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr>
               <th className="px-2 py-2 text-xs font-bold text-black/40 uppercase tracking-wider w-16">Time</th>
-              {days.map(day => (
+              {DAYS.slice(0, 5).map((day) => (
                 <th key={day} className="px-2 py-2 text-xs font-bold text-black/50 uppercase tracking-wider min-w-[120px]">
                   {day.substring(0, 3)}
                 </th>
@@ -1155,38 +3120,47 @@ function CalendarView({ entries, days, onEdit }: {
             </tr>
           </thead>
           <tbody>
-            {timeSlots.map(time => (
-              <tr key={time} className="border-t border-stone-100">
-                <td className="px-2 py-2 text-xs text-black/40 font-medium text-center">{time}</td>
-                {days.map(day => {
-                  const dayEntries = getEntriesForDayAndTime(day, time);
-                  return (
-                    <td key={`${day}-${time}`} className="px-1 py-1 min-h-[60px]">
-                      {dayEntries.map(entry => (
-                        <div
-                          key={entry.id}
-                          onClick={() => onEdit(entry)}
-                          className={`text-xs p-1.5 rounded-lg cursor-pointer hover:opacity-80 transition ${
-                            entry.cycle === "first" 
-                              ? "bg-blue-50 border border-blue-200" 
-                              : "bg-purple-50 border border-purple-200"
-                          }`}
-                        >
-                          <div className="font-semibold truncate">{entry.teacherName}</div>
-                          <div className="truncate text-black/60">{entry.subjectName}</div>
-                          <div className="truncate text-black/40 text-[10px]">{entry.className}</div>
-                          <div className="text-[10px] font-bold text-brand mt-0.5">{entry.ratePerPeriod} FRS</div>
-                        </div>
-                      ))}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {PDF_SCHEDULE.map((slot) => {
+              const isBreak = slot.type === "break";
+              return (
+                <tr key={slot.start} className={`border-t border-stone-100 ${isBreak ? 'bg-amber-50' : ''}`}>
+                  <td className={`px-2 py-2 text-xs text-black/40 font-medium text-center ${isBreak ? 'text-amber-600 font-bold' : ''}`}>
+                    {isBreak ? 'BREAK' : `${slot.start} - ${slot.end}`}
+                  </td>
+                  {DAYS.slice(0, 5).map((day) => {
+                    const dayEntries = entries.filter(e =>
+                      e.day === day &&
+                      e.startTime >= slot.start &&
+                      e.endTime <= slot.end
+                    );
+
+                    return (
+                      <td key={`${day}-${slot.start}`} className="px-1 py-1 min-h-[60px]">
+                        {dayEntries.map((entry) => (
+                          <div
+                            key={entry.id}
+                            onClick={() => onEdit(entry)}
+                            className={`text-xs p-1.5 rounded-lg cursor-pointer hover:opacity-80 transition ${entry.cycle === "first" ? "bg-blue-50 border border-blue-200" : "bg-purple-50 border border-purple-200"
+                              }`}
+                          >
+                            <div className="font-semibold truncate">{entry.teacherName}</div>
+                            <div className={`truncate ${entry.subjectName.includes('/') ? 'text-amber-700 font-bold' : 'text-black/60'}`}>
+                              {entry.subjectName}
+                            </div>
+                            <div className="truncate text-black/40 text-[10px]">{entry.className}</div>
+                            <div className="text-[10px] font-bold text-brand mt-0.5">{entry.ratePerPeriod} FRS</div>
+                          </div>
+                        ))}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      <div className="p-3 border-t border-stone-200 flex gap-4 text-xs">
+      <div className="p-3 border-t border-stone-200 flex gap-4 text-xs flex-wrap">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded bg-blue-100 border border-blue-200"></div>
           <span className="text-black/60">1st Cycle</span>
@@ -1198,10 +3172,13 @@ function CalendarView({ entries, days, onEdit }: {
         <div className="flex items-center gap-2">
           <span className="text-black/40">Click on any period to edit</span>
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-amber-700 font-semibold">Multi-subject</span>
+        </div>
       </div>
     </div>
   );
-}
+});
 
 // ============================================
 // TIMETABLE ENTRY MODAL
@@ -1213,7 +3190,7 @@ function TimetableEntryModal({
   classes,
   subjects,
   onSave,
-  onCancel
+  onCancel,
 }: {
   initial: TimetableEntry;
   teachers: Teacher[];
@@ -1222,17 +3199,30 @@ function TimetableEntryModal({
   onSave: (entry: TimetableEntry) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState<TimetableEntry>(initial);
+  const [form, setForm] = useState<TimetableEntry>(() => sanitizeEntry(initial));
   const [saving, setSaving] = useState(false);
-  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-  const set = <K extends keyof TimetableEntry>(k: K, v: TimetableEntry[K]) =>
-    setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => {
+    setForm(sanitizeEntry(initial));
+  }, [initial]);
+
+  const set = <K extends keyof TimetableEntry>(k: K, v: TimetableEntry[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  const isNewEntry = !initial._id && !initial.id?.startsWith('6a') || initial.id?.startsWith('entry_');
 
   const handleSubmit = () => {
+    const { startTime, endTime } = sanitizeTimes(form.startTime, form.endTime);
+
+    if (startTime >= endTime) {
+      toast.error("Start time must be before end time");
+      return;
+    }
+
+    const finalEntry: TimetableEntry = { ...form, startTime, endTime };
+
     setSaving(true);
     try {
-      onSave(form);
+      onSave(finalEntry);
     } finally {
       setSaving(false);
     }
@@ -1244,7 +3234,7 @@ function TimetableEntryModal({
         <div className="flex items-center justify-between mb-5">
           <h3 className="font-display font-bold text-xl flex items-center gap-3">
             <Calendar className="size-6 text-brand" />
-            {initial.teacherName ? "Edit Timetable Entry" : "Add New Period"}
+            {isNewEntry ? "Add New Period" : "Edit Timetable Entry"}
           </h3>
           <button onClick={onCancel} className="text-black/40 hover:text-black/70">
             <X className="size-5" />
@@ -1253,12 +3243,8 @@ function TimetableEntryModal({
 
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Day*">
-            <select
-              value={form.day}
-              onChange={(e) => set("day", e.target.value)}
-              className={inputCls}
-            >
-              {days.map(d => (
+            <select value={form.day} onChange={(e) => set("day", e.target.value)} className={inputCls}>
+              {DAYS.map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
             </select>
@@ -1268,7 +3254,7 @@ function TimetableEntryModal({
             <input
               type="number"
               value={form.periodNumber}
-              onChange={(e) => set("periodNumber", parseInt(e.target.value))}
+              onChange={(e) => set("periodNumber", parseInt(e.target.value) || 1)}
               className={inputCls}
               min="1"
               max="8"
@@ -1297,14 +3283,14 @@ function TimetableEntryModal({
             <select
               value={form.teacherId}
               onChange={(e) => {
-                const teacher = teachers.find(t => t._id === e.target.value);
+                const teacher = teachers.find((t) => t._id === e.target.value);
                 set("teacherId", e.target.value);
                 set("teacherName", teacher?.name || "");
               }}
               className={inputCls}
             >
               <option value="">Select Teacher</option>
-              {teachers.map(t => (
+              {teachers.map((t) => (
                 <option key={t._id} value={t._id}>{t.name}</option>
               ))}
             </select>
@@ -1314,15 +3300,17 @@ function TimetableEntryModal({
             <select
               value={form.classId}
               onChange={(e) => {
-                const cls = classes.find(c => c._id === e.target.value);
+                const cls = classes.find((c) => c._id === e.target.value);
                 set("classId", e.target.value);
                 set("className", cls?.className || "");
               }}
               className={inputCls}
             >
               <option value="">Select Class</option>
-              {classes.map(c => (
-                <option key={c._id} value={c._id}>{c.className + c.department}</option>
+              {classes.map((c) => (
+                <option key={c._id} value={c._id}>
+                  {c.department ? `${c.className} ${c.department}` : c.className}
+                </option>
               ))}
             </select>
           </Field>
@@ -1331,7 +3319,7 @@ function TimetableEntryModal({
             <select
               value={form.subjectId}
               onChange={(e) => {
-                const subj = subjects.find(s => s._id === e.target.value);
+                const subj = subjects.find((s) => s._id === e.target.value);
                 set("subjectId", e.target.value);
                 set("subjectName", subj?.name || "");
                 set("subjectCode", subj?.code || "");
@@ -1339,7 +3327,7 @@ function TimetableEntryModal({
               className={inputCls}
             >
               <option value="">Select Subject</option>
-              {subjects.map(s => (
+              {subjects.map((s) => (
                 <option key={s._id} value={s._id}>{s.name} ({s.code})</option>
               ))}
             </select>
@@ -1351,23 +3339,17 @@ function TimetableEntryModal({
               onChange={(e) => {
                 const cycle = e.target.value as "first" | "second";
                 set("cycle", cycle);
-                set("ratePerPeriod", cycle === "first" ? 500 : 700);
+                set("ratePerPeriod", CYCLE_RATES[cycle]);
               }}
               className={inputCls}
             >
-              <option value="first">First Cycle (500 FRS)</option>
-              <option value="second">Second Cycle (700 FRS)</option>
+              <option value="first">First Cycle ({CYCLE_RATES.first} FRS)</option>
+              <option value="second">Second Cycle ({CYCLE_RATES.second} FRS)</option>
             </select>
           </Field>
 
           <Field label="Room">
-            <input
-              type="text"
-              value={form.room || ""}
-              onChange={(e) => set("room", e.target.value)}
-              className={inputCls}
-              placeholder="Room number"
-            />
+            <input type="text" value={form.room || ""} onChange={(e) => set("room", e.target.value)} className={inputCls} placeholder="Room number" />
           </Field>
 
           <Field label="Academic Year">
@@ -1376,7 +3358,7 @@ function TimetableEntryModal({
               value={form.academicYear}
               onChange={(e) => set("academicYear", e.target.value)}
               className={inputCls}
-              placeholder="2024-2025"
+              placeholder="2026-2027"
             />
           </Field>
 
@@ -1386,19 +3368,28 @@ function TimetableEntryModal({
               <span className="text-xl font-bold text-brand">{form.ratePerPeriod} FRS</span>
             </div>
             <p className="text-xs text-black/40 mt-1">
-              {form.cycle === "first" 
-                ? "First cycle rate: 500 FRS per period" 
-                : "Second cycle rate: 700 FRS per period"}
+              {form.cycle === "first"
+                ? `First cycle rate: ${CYCLE_RATES.first} FRS per period`
+                : `Second cycle rate: ${CYCLE_RATES.second} FRS per period`}
             </p>
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-stone-100">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition"
-            disabled={saving}
-          >
+        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <p className="text-sm text-amber-800">
+            <span className="font-bold">💡 Multi-Subject Support:</span>
+            <br />
+            You can add multiple subjects to the same class at the same time.
+            Just make sure each subject has a <span className="font-bold">different teacher</span>.
+            <br />
+            <span className="text-xs text-amber-600 mt-1 block">
+              Example: Form 4A can have both Math (Teacher A) and Physics (Teacher B) at 08:00-09:00
+            </span>
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
+          <button onClick={onCancel} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition" disabled={saving}>
             Cancel
           </button>
           <button
@@ -1412,7 +3403,7 @@ function TimetableEntryModal({
                 Saving...
               </span>
             ) : (
-              "Save Entry"
+              isNewEntry ? "Add Period" : "Update Entry"
             )}
           </button>
         </div>
@@ -1429,55 +3420,58 @@ function BulkAddModal({
   teachers,
   classes,
   subjects,
-  days,
   onSave,
-  onCancel
+  onCancel,
 }: {
   teachers: Teacher[];
   classes: Class[];
   subjects: Subject[];
-  days: string[];
   onSave: (entries: TimetableEntry[]) => void;
   onCancel: () => void;
 }) {
-  const [entries, setEntries] = useState<Partial<TimetableEntry>[]>([
-    { day: "Monday", periodNumber: 1, cycle: "first", ratePerPeriod: 500 }
+  const [rows, setRows] = useState<Partial<TimetableEntry>[]>([
+    { day: "Monday", periodNumber: 1, cycle: "first", ratePerPeriod: CYCLE_RATES.first },
   ]);
   const [saving, setSaving] = useState(false);
 
   const addRow = () => {
-    setEntries([...entries, { day: "Monday", periodNumber: entries.length + 1, cycle: "first", ratePerPeriod: 500 }]);
+    setRows([...rows, { day: "Monday", periodNumber: rows.length + 1, cycle: "first", ratePerPeriod: CYCLE_RATES.first }]);
   };
 
-  const removeRow = (index: number) => {
-    setEntries(entries.filter((_, i) => i !== index));
-  };
+  const removeRow = (index: number) => setRows(rows.filter((_, i) => i !== index));
 
   const updateRow = (index: number, field: string, value: any) => {
-    const updated = [...entries];
+    const updated = [...rows];
     updated[index] = { ...updated[index], [field]: value };
     if (field === "cycle") {
-      updated[index].ratePerPeriod = value === "first" ? 500 : 700;
+      updated[index].ratePerPeriod = CYCLE_RATES[value as "first" | "second"];
     }
-    setEntries(updated);
+    setRows(updated);
   };
 
+  const validRowCount = rows.filter((e) => e.teacherId && e.classId && e.subjectId).length;
+
   const handleSubmit = () => {
-    const validEntries = entries.filter(e => e.teacherId && e.classId && e.subjectId);
+    const validEntries = rows.filter((e) => e.teacherId && e.classId && e.subjectId);
     if (validEntries.length === 0) {
       toast.error("Please fill in all required fields for at least one row");
       return;
     }
 
-    const formattedEntries = validEntries.map(e => ({
-      ...e,
-      id: `entry_${Date.now()}_${Math.random()}`,
-      teacherName: teachers.find(t => t._id === e.teacherId)?.name || "",
-      className: classes.find(c => c._id === e.classId)?.className || "",
-      subjectName: subjects.find(s => s._id === e.subjectId)?.name || "",
-      academicYear: "2024-2025",
-      isActive: true
-    })) as TimetableEntry[];
+    const formattedEntries = validEntries.map((e) => {
+      const { startTime, endTime } = sanitizeTimes(e.startTime, e.endTime);
+      return {
+        ...e,
+        startTime,
+        endTime,
+        id: `entry_${Date.now()}_${Math.random()}`,
+        teacherName: teachers.find((t) => t._id === e.teacherId)?.name || "",
+        className: classes.find((c) => c._id === e.classId)?.className || "",
+        subjectName: subjects.find((s) => s._id === e.subjectId)?.name || "",
+        academicYear: "2026-2027",
+        isActive: true,
+      };
+    }) as TimetableEntry[];
 
     setSaving(true);
     try {
@@ -1516,16 +3510,12 @@ function BulkAddModal({
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry, index) => (
+              {rows.map((entry, index) => (
                 <tr key={index} className="border-b border-stone-100">
                   <td className="px-2 py-2 text-center text-black/40">{index + 1}</td>
                   <td className="px-2 py-2">
-                    <select
-                      value={entry.day || "Monday"}
-                      onChange={(e) => updateRow(index, "day", e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-stone-200 text-sm"
-                    >
-                      {days.map(d => (
+                    <select value={entry.day || "Monday"} onChange={(e) => updateRow(index, "day", e.target.value)} className="w-full px-2 py-1 rounded border border-stone-200 text-sm">
+                      {DAYS.map((d) => (
                         <option key={d} value={d}>{d.substring(0, 3)}</option>
                       ))}
                     </select>
@@ -1541,59 +3531,42 @@ function BulkAddModal({
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <select
-                      value={entry.teacherId || ""}
-                      onChange={(e) => updateRow(index, "teacherId", e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-stone-200 text-sm"
-                    >
+                    <select value={entry.teacherId || ""} onChange={(e) => updateRow(index, "teacherId", e.target.value)} className="w-full px-2 py-1 rounded border border-stone-200 text-sm">
                       <option value="">Select</option>
-                      {teachers.map(t => (
+                      {teachers.map((t) => (
                         <option key={t._id} value={t._id}>{t.name}</option>
                       ))}
                     </select>
                   </td>
                   <td className="px-2 py-2">
-                    <select
-                      value={entry.classId || ""}
-                      onChange={(e) => updateRow(index, "classId", e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-stone-200 text-sm"
-                    >
+                    <select value={entry.classId || ""} onChange={(e) => updateRow(index, "classId", e.target.value)} className="w-full px-2 py-1 rounded border border-stone-200 text-sm">
                       <option value="">Select</option>
-                      {classes.map(c => (
-                        <option key={c._id} value={c._id}>{c.className}</option>
+                      {classes.map((c) => (
+                        <option key={c._id} value={c._id}>
+                          {c.department ? `${c.className} ${c.department}` : c.className}
+                        </option>
                       ))}
                     </select>
                   </td>
                   <td className="px-2 py-2">
-                    <select
-                      value={entry.subjectId || ""}
-                      onChange={(e) => updateRow(index, "subjectId", e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-stone-200 text-sm"
-                    >
+                    <select value={entry.subjectId || ""} onChange={(e) => updateRow(index, "subjectId", e.target.value)} className="w-full px-2 py-1 rounded border border-stone-200 text-sm">
                       <option value="">Select</option>
-                      {subjects.map(s => (
+                      {subjects.map((s) => (
                         <option key={s._id} value={s._id}>{s.name}</option>
                       ))}
                     </select>
                   </td>
                   <td className="px-2 py-2">
-                    <select
-                      value={entry.cycle || "first"}
-                      onChange={(e) => updateRow(index, "cycle", e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-stone-200 text-sm"
-                    >
+                    <select value={entry.cycle || "first"} onChange={(e) => updateRow(index, "cycle", e.target.value)} className="w-full px-2 py-1 rounded border border-stone-200 text-sm">
                       <option value="first">1st</option>
                       <option value="second">2nd</option>
                     </select>
                   </td>
                   <td className="px-2 py-2 text-center font-bold text-brand">
-                    {entry.cycle === "first" ? 500 : 700} FRS
+                    {entry.cycle === "first" ? CYCLE_RATES.first : CYCLE_RATES.second} FRS
                   </td>
                   <td className="px-2 py-2 text-center">
-                    <button
-                      onClick={() => removeRow(index)}
-                      className="p-1 rounded-lg hover:bg-red-50 text-red-500 transition"
-                    >
+                    <button onClick={() => removeRow(index)} className="p-1 rounded-lg hover:bg-red-50 text-red-500 transition">
                       <Trash2 className="size-4" />
                     </button>
                   </td>
@@ -1604,18 +3577,11 @@ function BulkAddModal({
         </div>
 
         <div className="flex items-center justify-between mt-4">
-          <button
-            onClick={addRow}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-dashed border-stone-300 text-sm font-semibold hover:border-brand/50 hover:text-brand transition"
-          >
+          <button onClick={addRow} className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-dashed border-stone-300 text-sm font-semibold hover:border-brand/50 hover:text-brand transition">
             <Plus className="size-4" /> Add Row
           </button>
           <div className="flex gap-2">
-            <button
-              onClick={onCancel}
-              className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition"
-              disabled={saving}
-            >
+            <button onClick={onCancel} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition" disabled={saving}>
               Cancel
             </button>
             <button
@@ -1623,10 +3589,13 @@ function BulkAddModal({
               className="px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition disabled:opacity-50"
               disabled={saving}
             >
-              {saving ? "Adding..." : `Add ${entries.filter(e => e.teacherId && e.classId && e.subjectId).length} Entries`}
+              {saving ? "Adding..." : `Add ${validRowCount} Entries`}
             </button>
           </div>
         </div>
+        <p className="text-xs text-amber-600 mt-3">
+          💡 Multiple subjects can be assigned to the same class at the same time. They will appear as "Subject1/Subject2" in the timetable.
+        </p>
       </div>
     </div>
   );
@@ -1639,13 +3608,13 @@ function BulkAddModal({
 function CopyYearModal({
   currentYear,
   onCopy,
-  onCancel
+  onCancel,
 }: {
   currentYear: string;
   onCopy: (sourceYear: string, targetYear: string) => void;
   onCancel: () => void;
 }) {
-  const [sourceYear, setSourceYear] = useState("2023-2024");
+  const [sourceYear, setSourceYear] = useState("2025-2026");
   const [targetYear, setTargetYear] = useState(currentYear);
 
   return (
@@ -1658,23 +3627,11 @@ function CopyYearModal({
 
         <div className="space-y-4">
           <Field label="Source Academic Year">
-            <input
-              type="text"
-              value={sourceYear}
-              onChange={(e) => setSourceYear(e.target.value)}
-              className={inputCls}
-              placeholder="2023-2024"
-            />
+            <input type="text" value={sourceYear} onChange={(e) => setSourceYear(e.target.value)} className={inputCls} placeholder="2025-2026" />
           </Field>
 
           <Field label="Target Academic Year">
-            <input
-              type="text"
-              value={targetYear}
-              onChange={(e) => setTargetYear(e.target.value)}
-              className={inputCls}
-              placeholder={currentYear}
-            />
+            <input type="text" value={targetYear} onChange={(e) => setTargetYear(e.target.value)} className={inputCls} placeholder={currentYear} />
           </Field>
 
           <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-sm text-yellow-800">
@@ -1685,10 +3642,7 @@ function CopyYearModal({
         </div>
 
         <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-stone-100">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition"
-          >
+          <button onClick={onCancel} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
             Cancel
           </button>
           <button

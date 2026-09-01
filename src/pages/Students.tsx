@@ -5,7 +5,7 @@ import axios from "axios";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // Types
 interface Student {
@@ -63,7 +63,7 @@ export function StudentsPage() {
   const [editing, setEditing] = useState<Student | null>(null);
   const [showNew, setShowNew] = useState(false);
 
-  const role = "admin";
+  const role: string = "admin";
   const canEdit = role === "super_admin" || role === "admin";
 
   // Fetch data

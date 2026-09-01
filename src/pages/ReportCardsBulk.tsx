@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import axios from "axios";
 import { exportElementsToPdf } from "@/lib/pdf-export";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // Term definitions for Cameroon school system
 const TERMS = [

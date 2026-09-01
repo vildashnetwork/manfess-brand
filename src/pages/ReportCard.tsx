@@ -292,16 +292,15 @@
 
 
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { gradeFor, rankWithTies, ordinal } from "@/lib/grading";
 import { Printer, ArrowLeft, GraduationCap, Download, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // Term definitions for Cameroon school system
 const TERMS = [

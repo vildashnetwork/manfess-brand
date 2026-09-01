@@ -4,7 +4,8 @@ import { GraduationCap, Shield, Wallet, BookOpen, UserRound, Loader2 } from "luc
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL
+//  ?? "https://manfess-back.onrender.com/api";
 
 // Types
 interface User {

@@ -3,7 +3,7 @@ import { Plus, Pencil, Trash2, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // Types
 interface Subject {
@@ -41,7 +41,7 @@ export function ClassesPage() {
   const [editingClass, setEditingClass] = useState<SchoolClass | null>(null);
   const [showNewClass, setShowNewClass] = useState(false);
 
-  const role = "admin";
+  const role: string = "admin";
   const canEdit = role === "super_admin" || role === "admin";
 
   // Helper to check if ID is a MongoDB ObjectId

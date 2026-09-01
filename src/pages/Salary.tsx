@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { 
-  Calendar, Clock, Users, Search, X, CalendarDays, 
-  User, BookOpen, ChevronLeft, ChevronRight, 
-  AlertCircle, Check, Home, LogOut, Menu, 
+import {
+  Calendar, Clock, Users, Search, X, CalendarDays,
+  User, BookOpen, ChevronLeft, ChevronRight,
+  AlertCircle, Check, Home, LogOut, Menu,
   Sun, Moon, Settings, Bell, Award, DollarSign, Download, Printer,
   ChevronDown, ChevronUp, Plus, Trash2, Edit, Save, Filter,
   CheckCircle, XCircle, Clock as ClockIcon, UserCheck, UserX,
-  FileText, CreditCard, Receipt, TrendingUp, TrendingDown
+  FileText, CreditCard, Receipt, TrendingUp, TrendingDown, RefreshCw
 } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // ============================================
 // TYPES
@@ -136,7 +136,7 @@ export function TeacherAttendancePage() {
     try {
       const params = new URLSearchParams();
       if (selectedTeacher) params.append('teacherId', selectedTeacher);
-      
+
       if (viewMode === 'daily' && selectedDate) {
         params.append('date', selectedDate);
       } else if (viewMode === 'monthly' && selectedMonth && selectedYear) {
@@ -165,12 +165,12 @@ export function TeacherAttendancePage() {
     const statuses: ("present" | "absent" | "late" | "excused")[] = ['present', 'present', 'present', 'late', 'absent'];
     const now = new Date();
     const date = now.toISOString().split('T')[0];
-    
+
     teachersList.forEach((teacher, i) => {
       const status = statuses[i % statuses.length];
       const checkIn = status === 'absent' ? '' : `${8 + Math.floor(Math.random() * 2)}:${Math.random() > 0.5 ? '00' : '30'}`;
       const checkOut = checkIn ? `${parseInt(checkIn) + 8}:${checkIn.split(':')[1]}` : '';
-      
+
       mockAttendance.push({
         id: `att_${i}`,
         teacherId: teacher._id,
@@ -184,7 +184,7 @@ export function TeacherAttendancePage() {
         notes: status === 'absent' ? 'Sick leave' : status === 'late' ? 'Traffic delay' : ''
       });
     });
-    
+
     return mockAttendance;
   };
 
@@ -257,7 +257,7 @@ export function TeacherAttendancePage() {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
     return record.teacherName.toLowerCase().includes(term) ||
-           record.status.toLowerCase().includes(term);
+      record.status.toLowerCase().includes(term);
   });
 
   // ============================================
@@ -731,14 +731,14 @@ export function TeacherSalaryPage() {
   const generateMockSalaries = (teachersList: Teacher[]) => {
     const mockSalaries: SalaryRecord[] = [];
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    
+
     teachersList.forEach((teacher, i) => {
       const firstCycle = Math.floor(Math.random() * 20) + 10;
       const secondCycle = Math.floor(Math.random() * 15) + 5;
       const grossSalary = (firstCycle * 500) + (secondCycle * 700);
       const absentDays = Math.floor(Math.random() * 3);
       const deductions = absentDays * 5000;
-      
+
       mockSalaries.push({
         id: `salary_${i}`,
         teacherId: teacher._id,
@@ -775,7 +775,7 @@ export function TeacherSalaryPage() {
         paymentMethod: i % 3 === 0 ? 'cash' : undefined
       });
     });
-    
+
     return mockSalaries;
   };
 

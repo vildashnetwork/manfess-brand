@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import axios from "axios";
 import html2canvas from "html2canvas-pro";
 
-const API_BASE = "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 interface Student {
   id: string;
