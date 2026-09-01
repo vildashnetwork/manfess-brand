@@ -36,12 +36,10 @@ interface Class {
 // Helper function to get fee by class name
 function getFeeByClass(className: string): number {
   const feeMap: { [key: string]: number } = {
-    "Form 1": 80000,
-    "Form 2": 80000,
-    "Form 3": 80000,
-    "Form 4": 80000,
-    "Form 5": 90000,
-    "Lower 6th": 100000,
+    "Beginers": 80000,
+    "level 3": 80000,
+    "level 4": 80000,
+    "level 5": 80000,
     "Upper 6th": 100000,
     "Graduated": 0
   };
