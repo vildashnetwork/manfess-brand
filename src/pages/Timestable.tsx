@@ -5,13 +5,13 @@ import {
   Filter, ChevronLeft, ChevronRight, Grid, List,
   AlertCircle, Check, Copy, RefreshCw, Upload, FileSpreadsheet,
   Eye, EyeOff, LayoutGrid, Table as TableIcon, User as UserIcon,
-  School, ChevronDown
+  School, ChevronDown, Settings
 } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 import html2canvas from "html2canvas-pro";
 
-const API_BASE = import.meta.env.VITE_API_URL;
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 const CYCLE_RATES = { first: 500, second: 700 } as const;
 
@@ -77,6 +77,8 @@ interface Subject {
   name: string;
   code: string;
   department?: string;
+  coefficient?: number;
+  cycle?: string;
   periodsPerWeek?: number;
   // Returned by GET /api/subjects — used by the generator readiness check.
   classIds?: string[];
@@ -680,6 +682,8 @@ export function TimetableAdminPage() {
   const [showSetupWizard, setShowSetupWizard] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateConflicts, setGenerateConflicts] = useState<GenerateConflict[]>([]);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showSubjectsModal, setShowSubjectsModal] = useState(false);
 
   const currentYear = new Date().getFullYear();
   const academicYear = "2026-2027";
@@ -811,6 +815,19 @@ export function TimetableAdminPage() {
   useEffect(() => {
     loadSchoolSettings();
   }, [loadSchoolSettings]);
+
+  // Re-fetch subjects after the Subjects & Periods manager saves changes.
+  const refreshSubjects = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/subjects`);
+      if (res.data.success && Array.isArray(res.data.data)) {
+        setSubjects(res.data.data);
+        saveToLocalStorage("subjects", res.data.data);
+      }
+    } catch (err) {
+      console.error("Failed to refresh subjects:", err);
+    }
+  }, []);
 
   const activeTeachers = useMemo(
     () => teachers.filter((t) => OBJECT_ID_RE.test(t._id || "")),
@@ -1985,6 +2002,18 @@ export function TimetableAdminPage() {
             <Calendar className="size-4" /> Auto-Generate
           </button>
           <button
+            onClick={() => setShowSettingsModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all"
+          >
+            <Settings className="size-4" /> School Settings
+          </button>
+          <button
+            onClick={() => setShowSubjectsModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all"
+          >
+            <BookOpen className="size-4" /> Subjects & Periods
+          </button>
+          <button
             onClick={exportToCSV}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-stone-200 text-sm font-semibold hover:bg-stone-50 transition-all"
           >
@@ -2243,6 +2272,24 @@ export function TimetableAdminPage() {
           onSaveSchoolSettings={saveSchoolSettings}
           onGenerate={handleGenerateTimetable}
           onCancel={() => setShowSetupWizard(false)}
+        />
+      )}
+
+      {showSettingsModal && (
+        <SchoolSettingsModal
+          settings={schoolSettings}
+          academicYear={academicYear}
+          onSave={saveSchoolSettings}
+          onClose={() => setShowSettingsModal(false)}
+        />
+      )}
+
+      {showSubjectsModal && (
+        <SubjectsManagerModal
+          subjects={subjects}
+          classes={classes}
+          onSaved={refreshSubjects}
+          onClose={() => setShowSubjectsModal(false)}
         />
       )}
     </div>
@@ -3667,5 +3714,384 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-[10px] uppercase tracking-widest font-bold text-black/50">{label}</span>
       <div className="mt-1">{children}</div>
     </label>
+  );
+}
+
+// ============================================
+// SCHOOL SETTINGS MODAL (standalone editor)
+// ============================================
+
+function SchoolSettingsModal({
+  settings,
+  academicYear,
+  onSave,
+  onClose,
+}: {
+  settings: SchoolSettings;
+  academicYear: string;
+  onSave: (settings: Omit<SchoolSettings, "_id">) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<LocalSettings>({
+    schoolStartTime: settings.schoolStartTime || "08:00",
+    schoolEndTime: settings.schoolEndTime || "14:00",
+    breakStart: settings.breakStart || "10:15",
+    breakEnd: settings.breakEnd || "10:30",
+    periodDurationMinutes: settings.periodDurationMinutes || 45,
+    schoolDays: settings.schoolDays?.length
+      ? [...settings.schoolDays]
+      : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    periodsPerDay: settings.periodsPerDay || 6,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const set = <K extends keyof LocalSettings>(k: K, v: LocalSettings[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  const computedPeriods = useMemo(() => {
+    const start = timeStringToMinutes(form.schoolStartTime);
+    const end = timeStringToMinutes(form.schoolEndTime);
+    const brkS = timeStringToMinutes(form.breakStart);
+    const brkE = timeStringToMinutes(form.breakEnd);
+    const dur = form.periodDurationMinutes;
+    let count = 0, cursor = start, periodNum = 1;
+    while (cursor + dur <= end && periodNum <= (form.periodsPerDay || 20)) {
+      const s = cursor, e = cursor + dur;
+      if (!(s < brkE && e > brkS)) { count += 1; periodNum += 1; }
+      cursor = e;
+    }
+    return count;
+  }, [form]);
+
+  const handleSave = async () => {
+    if (timeStringToMinutes(form.schoolStartTime) >= timeStringToMinutes(form.schoolEndTime)) {
+      toast.error("School start time must be before end time");
+      return;
+    }
+    if (timeStringToMinutes(form.breakStart) >= timeStringToMinutes(form.breakEnd)) {
+      toast.error("Break start must be before break end");
+      return;
+    }
+    if (form.schoolDays.length === 0) {
+      toast.error("Select at least one school day");
+      return;
+    }
+    setSaving(true);
+    const ok = await onSave({
+      schoolStartTime: form.schoolStartTime,
+      schoolEndTime: form.schoolEndTime,
+      breakStart: form.breakStart,
+      breakEnd: form.breakEnd,
+      periodDurationMinutes: form.periodDurationMinutes,
+      schoolDays: form.schoolDays,
+      periodsPerDay: form.periodsPerDay,
+    });
+    setSaving(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm grid place-items-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h3 className="font-display font-bold text-xl flex items-center gap-3">
+              <School className="size-6 text-brand" />
+              School Schedule Settings
+            </h3>
+            <p className="text-xs text-black/50 mt-1">
+              Academic year {academicYear} — these times drive the timetable auto-generator.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-black/40 hover:text-black/70">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Field label="School Start Time*">
+            <input type="time" value={form.schoolStartTime} onChange={(e) => set("schoolStartTime", e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="School End Time*">
+            <input type="time" value={form.schoolEndTime} onChange={(e) => set("schoolEndTime", e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Break Start*">
+            <input type="time" value={form.breakStart} onChange={(e) => set("breakStart", e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Break End*">
+            <input type="time" value={form.breakEnd} onChange={(e) => set("breakEnd", e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Period Duration (minutes)*">
+            <input type="number" min={10} max={120} value={form.periodDurationMinutes}
+              onChange={(e) => set("periodDurationMinutes", Math.max(10, Math.min(120, Number(e.target.value) || 45)))}
+              className={inputCls} />
+          </Field>
+          <Field label="Periods Per Day (max 12)*">
+            <input type="number" min={1} max={12} value={form.periodsPerDay}
+              onChange={(e) => set("periodsPerDay", Math.max(1, Math.min(12, Number(e.target.value) || 6)))}
+              className={inputCls} />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="School Days*">
+              <div className="flex flex-wrap gap-2">
+                {DAYS.map((day) => {
+                  const checked = form.schoolDays.includes(day);
+                  return (
+                    <button key={day} type="button"
+                      onClick={() => set("schoolDays", checked ? form.schoolDays.filter((d) => d !== day) : [...form.schoolDays, day])}
+                      className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"}`}>
+                      {day.slice(0, 3)}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          </div>
+          <div className="sm:col-span-2 p-3 bg-stone-50 rounded-xl text-sm">
+            <div>Periods per day (excluding break): <strong>{computedPeriods}</strong></div>
+            <div className="text-xs text-black/50 mt-1">
+              Based on {form.schoolStartTime}–{form.schoolEndTime} with break {form.breakStart}–{form.breakEnd} and {form.periodDurationMinutes}-minute periods.
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
+          <button onClick={onClose} disabled={saving} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving} className="px-5 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition disabled:opacity-50">
+            {saving ? "Saving..." : "Save Settings"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// SUBJECTS & PERIODS MANAGER MODAL
+// ============================================
+
+interface SubjectFormState {
+  _id?: string;
+  name: string;
+  code: string;
+  coefficient: number;
+  cycle: string;
+  periodsPerWeek: number;
+  classIds: string[];
+}
+
+const emptySubjectForm = (): SubjectFormState => ({
+  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, classIds: [],
+});
+
+function SubjectsManagerModal({
+  subjects,
+  classes,
+  onSaved,
+  onClose,
+}: {
+  subjects: Subject[];
+  classes: Class[];
+  onSaved: () => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<SubjectFormState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const classLabel = (c: Class) => (c.department ? `${c.className} ${c.department}` : c.className);
+
+  const classNamesOf = (s: Subject) => {
+    const ids = (s.classIds || []).map(String);
+    return classes.filter((c) => ids.includes(String(c._id))).map(classLabel);
+  };
+
+  const filtered = subjects.filter((s) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q);
+  });
+
+  const toggleClass = (classId: string) => {
+    setForm((prev) => {
+      if (!prev) return prev;
+      const has = prev.classIds.includes(classId);
+      return { ...prev, classIds: has ? prev.classIds.filter((c) => c !== classId) : [...prev.classIds, classId] };
+    });
+  };
+
+  const startEdit = (s: Subject) => {
+    setForm({
+      _id: s._id,
+      name: s.name,
+      code: s.code,
+      coefficient: s.coefficient ?? 1,
+      cycle: s.cycle || "1st Cycle",
+      periodsPerWeek: s.periodsPerWeek ?? 4,
+      classIds: (s.classIds || []).map(String),
+    });
+  };
+
+  const handleSave = async () => {
+    if (!form) return;
+    if (!form.name.trim() || !form.code.trim()) {
+      toast.error("Subject name and code are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        code: form.code.trim().toUpperCase(),
+        coefficient: Math.max(1, Number(form.coefficient) || 1),
+        cycle: form.cycle,
+        periodsPerWeek: Math.max(1, Math.min(20, Number(form.periodsPerWeek) || 4)),
+        classIds: form.classIds,
+      };
+      const res = form._id
+        ? await axios.put(`${API_BASE}/subjects/${form._id}`, payload)
+        : await axios.post(`${API_BASE}/subjects`, payload);
+      if (res.data.success) {
+        toast.success(form._id ? "Subject updated" : "Subject created");
+        setForm(null);
+        await onSaved();
+      } else {
+        toast.error(res.data.message || "Failed to save subject");
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || "Failed to save subject");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm grid place-items-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="font-display font-bold text-xl flex items-center gap-3">
+              <BookOpen className="size-6 text-brand" />
+              Subjects & Periods
+            </h3>
+            <p className="text-xs text-black/50 mt-1">
+              Periods/week = how many periods this subject gets in each assigned class during auto-generation.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-black/40 hover:text-black/70">
+            <X className="size-5" />
+          </button>
+        </div>
+        {form ? (
+          <div className="border border-stone-200 rounded-xl p-4">
+            <h4 className="font-bold text-sm mb-3">{form._id ? "Edit Subject" : "New Subject"}</h4>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Field label="Subject Name*">
+                <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} placeholder="e.g. Mathematics" />
+              </Field>
+              <Field label="Subject Code*">
+                <input type="text" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} placeholder="e.g. MATH" />
+              </Field>
+              <Field label="Coefficient*">
+                <input type="number" min={1} value={form.coefficient} onChange={(e) => setForm({ ...form, coefficient: Number(e.target.value) || 1 })} className={inputCls} />
+              </Field>
+              <Field label="Cycle*">
+                <select value={form.cycle} onChange={(e) => setForm({ ...form, cycle: e.target.value })} className={inputCls}>
+                  <option value="1st Cycle">1st Cycle</option>
+                  <option value="2nd Cycle">2nd Cycle</option>
+                </select>
+              </Field>
+              <Field label="Periods Per Week (per class)*">
+                <input type="number" min={1} max={20} value={form.periodsPerWeek} onChange={(e) => setForm({ ...form, periodsPerWeek: Number(e.target.value) || 1 })} className={inputCls} />
+              </Field>
+              <div className="sm:col-span-2">
+                <Field label="Assigned Classes">
+                  <div className="flex flex-wrap gap-2">
+                    {classes.map((c) => {
+                      const checked = form.classIds.includes(String(c._id));
+                      return (
+                        <button key={c._id} type="button" onClick={() => toggleClass(String(c._id))}
+                          className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"}`}>
+                          {classLabel(c)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
+              <button onClick={() => setForm(null)} disabled={saving} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-5 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition disabled:opacity-50">
+                {saving ? "Saving..." : form._id ? "Update Subject" : "Create Subject"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-3 items-center mb-4">
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
+                <input type="text" placeholder="Search subjects..." value={search} onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30" />
+              </div>
+              <button onClick={() => setForm(emptySubjectForm())} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition">
+                <Plus className="size-4" /> Add Subject
+              </button>
+            </div>
+
+            <div className="border border-stone-200 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-stone-50 border-b border-stone-200">
+                    <th className="px-3 py-2 text-left text-xs font-bold text-black/50 uppercase">Subject</th>
+                    <th className="px-3 py-2 text-center text-xs font-bold text-black/50 uppercase">Coeff</th>
+                    <th className="px-3 py-2 text-center text-xs font-bold text-black/50 uppercase">Cycle</th>
+                    <th className="px-3 py-2 text-center text-xs font-bold text-black/50 uppercase">Periods/Week</th>
+                    <th className="px-3 py-2 text-left text-xs font-bold text-black/50 uppercase">Classes</th>
+                    <th className="px-3 py-2 text-right text-xs font-bold text-black/50 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-8 text-center text-black/40">No subjects found. Click "Add Subject" to create one.</td>
+                    </tr>
+                  ) : filtered.map((s) => {
+                    const names = classNamesOf(s);
+                    return (
+                      <tr key={s._id} className="border-b border-stone-100 hover:bg-stone-50 transition">
+                        <td className="px-3 py-2.5">
+                          <div className="font-semibold">{s.name}</div>
+                          <div className="text-xs text-black/40 font-mono">{s.code}</div>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">{s.coefficient ?? "-"}</td>
+                        <td className="px-3 py-2.5 text-center text-xs">{s.cycle || "-"}</td>
+                        <td className="px-3 py-2.5 text-center font-bold text-brand">{s.periodsPerWeek ?? 4}</td>
+                        <td className="px-3 py-2.5 text-xs text-black/60">
+                          {names.length ? names.join(", ") : <span className="text-amber-600">None assigned</span>}
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <button onClick={() => startEdit(s)} className="p-1.5 rounded-lg hover:bg-stone-100 text-black/60 transition" title="Edit subject">
+                            <Pencil className="size-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-amber-600 mt-3">
+              💡 Teachers also need matching subject & class assignments (Teachers page) to be scheduled for these periods by the auto-generator.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
