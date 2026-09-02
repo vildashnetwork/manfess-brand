@@ -12,6 +12,7 @@ interface Subject {
   code: string;
   coefficient: number;
   cycle: string;
+  periodsPerWeek: number;
   classIds: string[];
   teacherIds: string[];
 }
@@ -74,6 +75,7 @@ export function ClassesPage() {
           code: s.code,
           coefficient: s.coefficient,
           cycle: s.cycle,
+          periodsPerWeek: s.periodsPerWeek ?? 4,
           classIds: s.classIds || [],
           teacherIds: s.teacherIds || []
         }));
@@ -136,12 +138,17 @@ export function ClassesPage() {
         toast.error("Cycle is required");
         return;
       }
+      if (!subject.periodsPerWeek || subject.periodsPerWeek < 1) {
+        toast.error("Periods per week must be at least 1");
+        return;
+      }
 
       const subjectData = {
         name: subject.name.trim(),
         code: subject.code.trim().toUpperCase(),
         coefficient: subject.coefficient,
         cycle: subject.cycle,
+        periodsPerWeek: Math.max(1, Math.min(20, Number(subject.periodsPerWeek) || 4)),
         classIds: subject.classIds || [],
         teacherIds: subject.teacherIds || []
       };
@@ -395,6 +402,7 @@ export function ClassesPage() {
                   <th className="px-5 py-3">Subject</th>
                   <th className="px-5 py-3">Code</th>
                   <th className="px-5 py-3 text-center">Coef</th>
+                  <th className="px-5 py-3 text-center">Periods/Wk</th>
                   <th className="px-5 py-3">Cycle</th>
                   <th className="px-5 py-3">Teachers</th>
                   {canEdit && <th className="px-5 py-3 text-right">Actions</th>}
@@ -411,6 +419,9 @@ export function ClassesPage() {
                         <span className="size-7 inline-grid place-items-center rounded-full bg-brand/10 text-brand font-bold text-xs">
                           {s.coefficient}
                         </span>
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        <span className="text-xs font-bold text-brand">{s.periodsPerWeek ?? 4}</span>
                       </td>
                       <td className="px-5 py-3 text-xs">{s.cycle}</td>
                       <td className="px-5 py-3 text-xs text-black/60">
@@ -445,7 +456,7 @@ export function ClassesPage() {
                 })}
                 {subjects.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-8 text-center text-black/40">
+                    <td colSpan={canEdit ? 7 : 6} className="px-5 py-8 text-center text-black/40">
                       No subjects found. Click "Add Subject" to create one.
                     </td>
                   </tr>
@@ -465,6 +476,7 @@ export function ClassesPage() {
             code: "",
             coefficient: 1,
             cycle: "1st Cycle",
+            periodsPerWeek: 4,
             classIds: [],
             teacherIds: []
           }}
@@ -590,7 +602,22 @@ function SubjectDialog({
               ))}
             </select>
           </Field>
+          <Field label="Periods / Week (per class)*">
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={form.periodsPerWeek}
+              onChange={(e) => set("periodsPerWeek", Number(e.target.value) || 1)}
+              className={inputCls}
+              required
+            />
+          </Field>
         </div>
+
+        <p className="text-[11px] text-black/40 mt-1">
+          Periods per week = how many periods this subject is scheduled in each assigned class during timetable auto-generation (default 4).
+        </p>
 
         <div className="mt-4">
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/50 mb-2">Assigned to Classes</div>
