@@ -491,7 +491,7 @@ function buildPaginatedPdfGrids(entries: TimetableEntry[], schedule: ScheduleSlo
 }
 
 // ============================================
-// BUILD MATRIX TIMETABLE WITH PDF_SCHEDULE TIME RANGES
+// BUILD MATRIX TIMETABLE FROM THE LIVE DB SCHEDULE
 // ============================================
 
 function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], schedule: ScheduleSlot[], schoolDays: string[]): any {
@@ -2293,6 +2293,8 @@ export function TimetableAdminPage() {
         <CalendarView
           entries={combineMultiSubjectEntries(filteredEntries)}
           onEdit={handleEditRequest}
+          schedule={schedule}
+          days={scheduleDays}
         />
       )}
 
@@ -3070,7 +3072,7 @@ function GenerateTab({
           if (!tClassIds.includes(classId)) return;
           if (!tSubjectIds.includes(String(s._id))) return;
           assignments += 1;
-          weeklyPeriods += s.periodsPerWeek || 4;
+          weeklyPeriods += s.periodsByClass?.[classId] ?? s.periodsPerWeek ?? 4;
         });
       });
       return { teacher: t, assignments, weeklyPeriods };
@@ -3209,9 +3211,13 @@ function GenerateTab({
 const CalendarView = memo(function CalendarView({
   entries,
   onEdit,
+  schedule,
+  days,
 }: {
   entries: TimetableEntry[];
   onEdit: (entry: TimetableEntry) => void;
+  schedule: ScheduleSlot[];
+  days: string[];
 }) {
   const entriesByDayTime = useMemo(() => {
     const map = new Map<string, TimetableEntry[]>();
@@ -3237,7 +3243,7 @@ const CalendarView = memo(function CalendarView({
           <thead>
             <tr>
               <th className="px-2 py-2 text-xs font-bold text-black/40 uppercase tracking-wider w-16">Time</th>
-              {DAYS.slice(0, 5).map((day) => (
+              {days.map((day) => (
                 <th key={day} className="px-2 py-2 text-xs font-bold text-black/50 uppercase tracking-wider min-w-[120px]">
                   {day.substring(0, 3)}
                 </th>
@@ -3245,14 +3251,14 @@ const CalendarView = memo(function CalendarView({
             </tr>
           </thead>
           <tbody>
-            {PDF_SCHEDULE.map((slot) => {
+            {schedule.map((slot) => {
               const isBreak = slot.type === "break";
               return (
                 <tr key={slot.start} className={`border-t border-stone-100 ${isBreak ? 'bg-amber-50' : ''}`}>
                   <td className={`px-2 py-2 text-xs text-black/40 font-medium text-center ${isBreak ? 'text-amber-600 font-bold' : ''}`}>
                     {isBreak ? 'BREAK' : `${slot.start} - ${slot.end}`}
                   </td>
-                  {DAYS.slice(0, 5).map((day) => {
+                  {days.map((day) => {
                     const dayEntries = entries.filter(e =>
                       e.day === day &&
                       e.startTime >= slot.start &&
