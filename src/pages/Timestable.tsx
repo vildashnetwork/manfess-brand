@@ -80,6 +80,7 @@ interface Subject {
   coefficient?: number;
   cycle?: string;
   periodsPerWeek?: number;
+  periodsByClass?: Record<string, number>;
   // Returned by GET /api/subjects — used by the generator readiness check.
   classIds?: string[];
   teacherIds?: string[];
@@ -3879,11 +3880,12 @@ interface SubjectFormState {
   coefficient: number;
   cycle: string;
   periodsPerWeek: number;
+  periodsByClass: Record<string, number>;
   classIds: string[];
 }
 
 const emptySubjectForm = (): SubjectFormState => ({
-  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, classIds: [],
+  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, periodsByClass: {}, classIds: [],
 });
 
 function SubjectsManagerModal({
@@ -3918,7 +3920,29 @@ function SubjectsManagerModal({
     setForm((prev) => {
       if (!prev) return prev;
       const has = prev.classIds.includes(classId);
-      return { ...prev, classIds: has ? prev.classIds.filter((c) => c !== classId) : [...prev.classIds, classId] };
+      // Drop the override when unassigning so stale values never persist.
+      const periodsByClass = { ...prev.periodsByClass };
+      if (has) {
+        delete periodsByClass[classId];
+      }
+      return {
+        ...prev,
+        classIds: has ? prev.classIds.filter((c) => c !== classId) : [...prev.classIds, classId],
+        periodsByClass,
+      };
+    });
+  };
+
+  const setClassPeriods = (classId: string, value: number) => {
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        periodsByClass: {
+          ...prev.periodsByClass,
+          [classId]: Math.max(1, Math.min(20, Number(value) || 1)),
+        },
+      };
     });
   };
 
@@ -3930,6 +3954,7 @@ function SubjectsManagerModal({
       coefficient: s.coefficient ?? 1,
       cycle: s.cycle || "1st Cycle",
       periodsPerWeek: s.periodsPerWeek ?? 4,
+      periodsByClass: { ...(s.periodsByClass || {}) },
       classIds: (s.classIds || []).map(String),
     });
   };
@@ -3942,12 +3967,21 @@ function SubjectsManagerModal({
     }
     setSaving(true);
     try {
+      // Only keep per-class overrides for classes the subject is assigned to.
+      const periodsByClass: Record<string, number> = {};
+      form.classIds.forEach((cid) => {
+        const override = Number(form.periodsByClass?.[cid]);
+        if (Number.isFinite(override) && override >= 1) {
+          periodsByClass[cid] = Math.max(1, Math.min(20, Math.floor(override)));
+        }
+      });
       const payload = {
         name: form.name.trim(),
         code: form.code.trim().toUpperCase(),
         coefficient: Math.max(1, Number(form.coefficient) || 1),
         cycle: form.cycle,
         periodsPerWeek: Math.max(1, Math.min(20, Number(form.periodsPerWeek) || 4)),
+        periodsByClass,
         classIds: form.classIds,
       };
       const res = form._id
@@ -3977,7 +4011,7 @@ function SubjectsManagerModal({
               Subjects & Periods
             </h3>
             <p className="text-xs text-black/50 mt-1">
-              Periods/week = how many periods this subject gets in each assigned class during auto-generation.
+              Set a default periods/week, then override per class (e.g. Physics: 4 in OLevel 3, 5 in OLevel 5).
             </p>
           </div>
           <button onClick={onClose} className="text-black/40 hover:text-black/70">
@@ -4003,7 +4037,7 @@ function SubjectsManagerModal({
                   <option value="2nd Cycle">2nd Cycle</option>
                 </select>
               </Field>
-              <Field label="Periods Per Week (per class)*">
+              <Field label="Default Periods / Week*">
                 <input type="number" min={1} max={20} value={form.periodsPerWeek} onChange={(e) => setForm({ ...form, periodsPerWeek: Number(e.target.value) || 1 })} className={inputCls} />
               </Field>
               <div className="sm:col-span-2">
@@ -4021,6 +4055,33 @@ function SubjectsManagerModal({
                   </div>
                 </Field>
               </div>
+              {form.classIds.length > 0 && (
+                <div className="sm:col-span-2 space-y-2">
+                  <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Periods per week by class (overrides the default)</div>
+                  {classes
+                    .filter((c) => form.classIds.includes(String(c._id)))
+                    .map((c) => {
+                      const cid = String(c._id);
+                      return (
+                        <div key={cid} className="flex items-center justify-between gap-3 bg-stone-50 rounded-lg px-3 py-2">
+                          <span className="text-xs font-semibold text-black/70">{classLabel(c)}</span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={form.periodsByClass[cid] ?? form.periodsPerWeek ?? 4}
+                              onChange={(e) => setClassPeriods(cid, Number(e.target.value))}
+                              className="w-16 px-2 py-1 rounded-lg border border-stone-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-brand/30"
+                            />
+                            <span className="text-[10px] text-black/40">/ week</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  <p className="text-[11px] text-black/40">Leave a class untouched to use the default periods per week.</p>
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
               <button onClick={() => setForm(null)} disabled={saving} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
@@ -4071,7 +4132,9 @@ function SubjectsManagerModal({
                         </td>
                         <td className="px-3 py-2.5 text-center">{s.coefficient ?? "-"}</td>
                         <td className="px-3 py-2.5 text-center text-xs">{s.cycle || "-"}</td>
-                        <td className="px-3 py-2.5 text-center font-bold text-brand">{s.periodsPerWeek ?? 4}</td>
+                        <td className="px-3 py-2.5 text-center font-bold text-brand" title={Object.keys(s.periodsByClass || {}).length > 0 ? "Some classes have custom period counts" : undefined}>
+                          {s.periodsPerWeek ?? 4}{Object.keys(s.periodsByClass || {}).length > 0 ? "*" : ""}
+                        </td>
                         <td className="px-3 py-2.5 text-xs text-black/60">
                           {names.length ? names.join(", ") : <span className="text-amber-600">None assigned</span>}
                         </td>

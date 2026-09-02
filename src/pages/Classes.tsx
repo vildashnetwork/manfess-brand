@@ -13,6 +13,7 @@ interface Subject {
   coefficient: number;
   cycle: string;
   periodsPerWeek: number;
+  periodsByClass: Record<string, number>;
   classIds: string[];
   teacherIds: string[];
 }
@@ -76,6 +77,7 @@ export function ClassesPage() {
           coefficient: s.coefficient,
           cycle: s.cycle,
           periodsPerWeek: s.periodsPerWeek ?? 4,
+          periodsByClass: s.periodsByClass || {},
           classIds: s.classIds || [],
           teacherIds: s.teacherIds || []
         }));
@@ -143,12 +145,22 @@ export function ClassesPage() {
         return;
       }
 
+      // Only keep per-class overrides for classes the subject is assigned to.
+      const periodsByClass: Record<string, number> = {};
+      (subject.classIds || []).forEach((cid) => {
+        const override = Number(subject.periodsByClass?.[cid]);
+        if (Number.isFinite(override) && override >= 1) {
+          periodsByClass[cid] = Math.max(1, Math.min(20, Math.floor(override)));
+        }
+      });
+
       const subjectData = {
         name: subject.name.trim(),
         code: subject.code.trim().toUpperCase(),
         coefficient: subject.coefficient,
         cycle: subject.cycle,
         periodsPerWeek: Math.max(1, Math.min(20, Number(subject.periodsPerWeek) || 4)),
+        periodsByClass,
         classIds: subject.classIds || [],
         teacherIds: subject.teacherIds || []
       };
@@ -421,7 +433,12 @@ export function ClassesPage() {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-center">
-                        <span className="text-xs font-bold text-brand">{s.periodsPerWeek ?? 4}</span>
+                        <span
+                          className="text-xs font-bold text-brand"
+                          title={Object.keys(s.periodsByClass || {}).length > 0 ? "Some classes have custom period counts" : undefined}
+                        >
+                          {s.periodsPerWeek ?? 4}{Object.keys(s.periodsByClass || {}).length > 0 ? "*" : ""}
+                        </span>
                       </td>
                       <td className="px-5 py-3 text-xs">{s.cycle}</td>
                       <td className="px-5 py-3 text-xs text-black/60">
@@ -477,6 +494,7 @@ export function ClassesPage() {
             coefficient: 1,
             cycle: "1st Cycle",
             periodsPerWeek: 4,
+            periodsByClass: {},
             classIds: [],
             teacherIds: []
           }}
@@ -527,11 +545,23 @@ function SubjectDialog({
   const set = <K extends keyof Subject>(k: K, v: Subject[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const toggleClass = (id: string) =>
-    set("classIds", form.classIds.includes(id)
-      ? form.classIds.filter((x) => x !== id)
-      : [...form.classIds, id]
-    );
+  const toggleClass = (id: string) => {
+    if (form.classIds.includes(id)) {
+      set("classIds", form.classIds.filter((x) => x !== id));
+      // Drop the override so unassigned classes never carry stale data.
+      const next = { ...form.periodsByClass };
+      delete next[id];
+      set("periodsByClass", next);
+    } else {
+      set("classIds", [...form.classIds, id]);
+    }
+  };
+
+  const setClassPeriods = (classId: string, value: number) =>
+    set("periodsByClass", {
+      ...form.periodsByClass,
+      [classId]: Math.max(1, Math.min(20, Number(value) || 1)),
+    });
 
   const toggleTeacher = (id: string) =>
     set("teacherIds", form.teacherIds.includes(id)
@@ -602,7 +632,7 @@ function SubjectDialog({
               ))}
             </select>
           </Field>
-          <Field label="Periods / Week (per class)*">
+          <Field label="Default Periods / Week*">
             <input
               type="number"
               min={1}
@@ -616,7 +646,7 @@ function SubjectDialog({
         </div>
 
         <p className="text-[11px] text-black/40 mt-1">
-          Periods per week = how many periods this subject is scheduled in each assigned class during timetable auto-generation (default 4).
+          The default is used for every assigned class during timetable auto-generation. Set class-specific values under "Assigned to Classes" below (e.g. Physics: 4 in OLevel 3, 5 in OLevel 5).
         </p>
 
         <div className="mt-4">
@@ -639,6 +669,31 @@ function SubjectDialog({
               <span className="text-xs text-black/40">No classes available</span>
             )}
           </div>
+
+          {form.classIds.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Periods per week by class</div>
+              {classes
+                .filter((c) => form.classIds.includes(c.id))
+                .map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-3 bg-stone-50 rounded-lg px-3 py-2">
+                    <span className="text-xs font-semibold text-black/70">{c.className + " " + c.department}</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={form.periodsByClass[c.id] ?? form.periodsPerWeek ?? 4}
+                        onChange={(e) => setClassPeriods(c.id, Number(e.target.value))}
+                        className="w-16 px-2 py-1 rounded-lg border border-stone-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-brand/30"
+                      />
+                      <span className="text-[10px] text-black/40">/ week</span>
+                    </div>
+                  </div>
+                ))}
+              <p className="text-[11px] text-black/40">Leave a class untouched to use the default periods per week.</p>
+            </div>
+          )}
         </div>
 
         <div className="mt-4">
