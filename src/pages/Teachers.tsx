@@ -1067,7 +1067,7 @@ export function TeachersPage() {
                   <div className="flex flex-wrap gap-1">
                     {teacherClasses.map((c) => (
                       <span key={c.id} className="text-[10px] bg-stone-100 px-2 py-1 rounded-full font-medium">
-                        {c.className}
+                        {c.className} + {c?.department}
                       </span>
                     ))}
                     {teacherClasses.length === 0 && (
