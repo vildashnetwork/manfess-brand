@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Plus, Pencil, Trash2, BookOpen } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Plus, Pencil, Trash2, BookOpen, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 
@@ -43,8 +43,77 @@ export function ClassesPage() {
   const [editingClass, setEditingClass] = useState<SchoolClass | null>(null);
   const [showNewClass, setShowNewClass] = useState(false);
 
+  // Filters — Classes table
+  const [classSearch, setClassSearch] = useState("");
+  const [classDepartment, setClassDepartment] = useState("");
+  const [classCycle, setClassCycle] = useState("");
+  const [classYear, setClassYear] = useState("");
+
+  // Filters — Subjects table
+  const [subjectSearch, setSubjectSearch] = useState("");
+  const [subjectCycle, setSubjectCycle] = useState("");
+  const [subjectClassId, setSubjectClassId] = useState("");
+  const [subjectTeacherId, setSubjectTeacherId] = useState("");
+
   const role: string = "admin";
   const canEdit = role === "super_admin" || role === "admin";
+
+  // Unique filter options derived from the data
+  const uniqueDepartments = useMemo(
+    () => Array.from(new Set(classes.map((c) => c.department).filter(Boolean))).sort(),
+    [classes]
+  );
+  const uniqueCycles = useMemo(
+    () => Array.from(new Set(classes.map((c) => c.cycle).filter(Boolean))).sort(),
+    [classes]
+  );
+  const uniqueYears = useMemo(
+    () => Array.from(new Set(classes.map((c) => c.acedemicYear).filter(Boolean))).sort().reverse(),
+    [classes]
+  );
+  const uniqueSubjectCycles = useMemo(
+    () => Array.from(new Set(subjects.map((s) => s.cycle).filter(Boolean))).sort(),
+    [subjects]
+  );
+
+  const filteredClasses = useMemo(() => {
+    const q = classSearch.trim().toLowerCase();
+    return classes.filter((c) => {
+      if (q && !`${c.className} ${c.department}`.toLowerCase().includes(q) && !c.acedemicYear.toLowerCase().includes(q)) return false;
+      if (classDepartment && c.department !== classDepartment) return false;
+      if (classCycle && c.cycle !== classCycle) return false;
+      if (classYear && c.acedemicYear !== classYear) return false;
+      return true;
+    });
+  }, [classes, classSearch, classDepartment, classCycle, classYear]);
+
+  const filteredSubjects = useMemo(() => {
+    const q = subjectSearch.trim().toLowerCase();
+    return subjects.filter((s) => {
+      if (q && !s.name.toLowerCase().includes(q) && !s.code.toLowerCase().includes(q)) return false;
+      if (subjectCycle && s.cycle !== subjectCycle) return false;
+      if (subjectClassId && !s.classIds.includes(subjectClassId)) return false;
+      if (subjectTeacherId && !s.teacherIds.includes(subjectTeacherId)) return false;
+      return true;
+    });
+  }, [subjects, subjectSearch, subjectCycle, subjectClassId, subjectTeacherId]);
+
+  const hasClassFilters = Boolean(classSearch || classDepartment || classCycle || classYear);
+  const hasSubjectFilters = Boolean(subjectSearch || subjectCycle || subjectClassId || subjectTeacherId);
+
+  const clearClassFilters = () => {
+    setClassSearch("");
+    setClassDepartment("");
+    setClassCycle("");
+    setClassYear("");
+  };
+
+  const clearSubjectFilters = () => {
+    setSubjectSearch("");
+    setSubjectCycle("");
+    setSubjectClassId("");
+    setSubjectTeacherId("");
+  };
 
   // Helper to check if ID is a MongoDB ObjectId
   const isDatabaseId = (id: string) => {
@@ -321,7 +390,9 @@ export function ClassesPage() {
         {/* Classes Table */}
         <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
-            <h3 className="font-display font-bold">Classes ({classes.length})</h3>
+            <h3 className="font-display font-bold">
+              Classes ({filteredClasses.length}{hasClassFilters ? ` of ${classes.length}` : ""})
+            </h3>
             {canEdit && (
               <button
                 onClick={() => {
@@ -333,6 +404,67 @@ export function ClassesPage() {
                 <Plus className="size-3.5" /> Class
               </button>
             )}
+          </div>
+
+          <div className="px-5 py-3 border-b border-stone-200 space-y-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
+              <input
+                type="text"
+                placeholder="Search class or academic year..."
+                value={classSearch}
+                onChange={(e) => setClassSearch(e.target.value)}
+                className="w-full pl-10 pr-8 py-2 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+              />
+              {classSearch && (
+                <button
+                  onClick={() => setClassSearch("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-black/40 hover:text-black/70"
+                >
+                  <X className="size-4" />
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={classDepartment}
+                onChange={(e) => setClassDepartment(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Departments</option>
+                {uniqueDepartments.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+              <select
+                value={classCycle}
+                onChange={(e) => setClassCycle(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Cycles</option>
+                {uniqueCycles.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                value={classYear}
+                onChange={(e) => setClassYear(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Years</option>
+                {uniqueYears.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+              {hasClassFilters && (
+                <button
+                  onClick={clearClassFilters}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-xl border border-stone-200 font-semibold hover:bg-stone-50"
+                >
+                  <X className="size-3.5" /> Clear
+                </button>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -346,7 +478,7 @@ export function ClassesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {classes.map((c) => (
+                {filteredClasses.map((c) => (
                   <tr key={c.id} className="hover:bg-stone-50">
                     <td className="px-5 py-3 font-semibold">{c.className}</td>
                     <td className="px-5 py-3">
@@ -379,10 +511,12 @@ export function ClassesPage() {
                     )}
                   </tr>
                 ))}
-                {classes.length === 0 && (
+                {filteredClasses.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-5 py-8 text-center text-black/40">
-                      No classes found. Click "Add Class" to create one.
+                      {classes.length === 0
+                        ? 'No classes found. Click "Add Class" to create one.'
+                        : "No classes match your filters."}
                     </td>
                   </tr>
                 )}
@@ -394,7 +528,9 @@ export function ClassesPage() {
         {/* Subjects Table */}
         <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
-            <h3 className="font-display font-bold">Subjects ({subjects.length})</h3>
+            <h3 className="font-display font-bold">
+              Subjects ({filteredSubjects.length}{hasSubjectFilters ? ` of ${subjects.length}` : ""})
+            </h3>
             {canEdit && (
               <button
                 onClick={() => {
@@ -406,6 +542,67 @@ export function ClassesPage() {
                 <Plus className="size-3.5" /> Subject
               </button>
             )}
+          </div>
+
+          <div className="px-5 py-3 border-b border-stone-200 space-y-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
+              <input
+                type="text"
+                placeholder="Search subject or code..."
+                value={subjectSearch}
+                onChange={(e) => setSubjectSearch(e.target.value)}
+                className="w-full pl-10 pr-8 py-2 rounded-xl border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+              />
+              {subjectSearch && (
+                <button
+                  onClick={() => setSubjectSearch("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-black/40 hover:text-black/70"
+                >
+                  <X className="size-4" />
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={subjectCycle}
+                onChange={(e) => setSubjectCycle(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Cycles</option>
+                {uniqueSubjectCycles.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                value={subjectClassId}
+                onChange={(e) => setSubjectClassId(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Classes</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.className + " " + c.department}</option>
+                ))}
+              </select>
+              <select
+                value={subjectTeacherId}
+                onChange={(e) => setSubjectTeacherId(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+              >
+                <option value="">All Teachers</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.fullName}</option>
+                ))}
+              </select>
+              {hasSubjectFilters && (
+                <button
+                  onClick={clearSubjectFilters}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-xl border border-stone-200 font-semibold hover:bg-stone-50"
+                >
+                  <X className="size-3.5" /> Clear
+                </button>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -421,7 +618,7 @@ export function ClassesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {subjects.map((s) => {
+                {filteredSubjects.map((s) => {
                   const subjectTeachers = teachers.filter((t) => s.teacherIds.includes(t.id));
                   return (
                     <tr key={s.id} className="hover:bg-stone-50">
@@ -471,10 +668,12 @@ export function ClassesPage() {
                     </tr>
                   );
                 })}
-                {subjects.length === 0 && (
+                {filteredSubjects.length === 0 && (
                   <tr>
                     <td colSpan={canEdit ? 7 : 6} className="px-5 py-8 text-center text-black/40">
-                      No subjects found. Click "Add Subject" to create one.
+                      {subjects.length === 0
+                        ? 'No subjects found. Click "Add Subject" to create one.'
+                        : "No subjects match your filters."}
                     </td>
                   </tr>
                 )}
