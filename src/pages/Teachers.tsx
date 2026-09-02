@@ -1130,11 +1130,10 @@ function TeacherDialog({
     setForm((f) => ({ ...f, [k]: v }));
 
   const toggleSubject = (id: string) => {
-    if (form.subjectIds.includes(id)) {
-      set("subjectIds", []);
-    } else {
-      set("subjectIds", [id]);
-    }
+    const updated = form.subjectIds.includes(id)
+      ? form.subjectIds.filter((subjectId) => subjectId !== id)
+      : [...form.subjectIds, id];
+    set("subjectIds", updated);
   };
 
   const toggleClass = (id: string) => {
@@ -1246,9 +1245,9 @@ function TeacherDialog({
         {/* Subjects Section */}
         <div className="mt-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Subjects (Select One)</div>
+            <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Subjects (Select Multiple)</div>
             <div className="text-xs text-brand font-bold">
-              {form.subjectIds.length === 1 ? '1 selected' : 'None selected'}
+              {form.subjectIds.length} selected
             </div>
           </div>
 
@@ -1289,9 +1288,9 @@ function TeacherDialog({
             )}
           </div>
           <div className="text-xs text-black/40 mt-1">
-            {form.subjectIds.length === 1
-              ? `Selected: ${subjects.find(s => s.id === form.subjectIds[0])?.name || ''}`
-              : 'Click a subject to select it'}
+            {form.subjectIds.length === 0
+              ? 'Click subjects to select them'
+              : `${form.subjectIds.length} subject${form.subjectIds.length !== 1 ? 's' : ''} selected`}
           </div>
         </div>
 
