@@ -15,16 +15,91 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 const CYCLE_RATES = { first: 500, second: 700 } as const;
 
-// Real period schedule used for the PDF grid layout and matrix
-const PDF_SCHEDULE = [
-  { type: "period" as const, label: "1", start: "08:00", end: "08:45" },
-  { type: "period" as const, label: "2", start: "08:45", end: "09:30" },
-  { type: "period" as const, label: "3", start: "09:30", end: "10:15" },
-  { type: "break" as const, label: "BREAK TIME", start: "10:15", end: "10:30" },
-  { type: "period" as const, label: "4", start: "10:30", end: "11:15" },
-  { type: "period" as const, label: "5", start: "11:15", end: "12:00" },
-];
-const PDF_GRID_DAYS = DAYS.slice(0, 5);
+// Default school schedule (mirrors the backend defaults). This is ONLY a
+// fallback — the live schedule is always rebuilt from the SchoolSettings
+// stored in the database, so time frames can change at any time.
+const DEFAULT_SCHOOL_SETTINGS = {
+  schoolStartTime: "08:00",
+  schoolEndTime: "14:00",
+  breakStart: "10:15",
+  breakEnd: "10:30",
+  periodDurationMinutes: 45,
+  schoolDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  periodsPerDay: 6,
+};
+
+type ScheduleSlot = {
+  type: "period" | "break";
+  label: string;
+  start: string;
+  end: string;
+};
+
+const minutesToTimeString = (m: number): string => {
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+};
+
+// Build the day's period/break slots from the school settings in the database.
+// Same math as the backend generator (routes/timetable.js buildPeriodSlots).
+function buildScheduleFromSettings(settings: {
+  schoolStartTime: string;
+  schoolEndTime: string;
+  breakStart: string;
+  breakEnd: string;
+  periodDurationMinutes: number;
+  periodsPerDay: number;
+}): ScheduleSlot[] {
+  const start = timeStringToMinutes(settings.schoolStartTime);
+  const end = timeStringToMinutes(settings.schoolEndTime);
+  const brkS = timeStringToMinutes(settings.breakStart);
+  const brkE = timeStringToMinutes(settings.breakEnd);
+  const dur = settings.periodDurationMinutes || 45;
+  const maxPeriods = settings.periodsPerDay || 12;
+
+  const slots: ScheduleSlot[] = [];
+  let cursor = start;
+  let periodNum = 1;
+  let breakAdded = false;
+
+  while (cursor + dur <= end && periodNum <= maxPeriods) {
+    const slotStart = cursor;
+    const slotEnd = cursor + dur;
+    const overlapsBreak = slotStart < brkE && slotEnd > brkS;
+    if (overlapsBreak && !breakAdded) {
+      slots.push({
+        type: "break",
+        label: "BREAK TIME",
+        start: minutesToTimeString(brkS),
+        end: minutesToTimeString(brkE),
+      });
+      breakAdded = true;
+    } else if (!overlapsBreak) {
+      slots.push({
+        type: "period",
+        label: String(periodNum),
+        start: minutesToTimeString(slotStart),
+        end: minutesToTimeString(slotEnd),
+      });
+      periodNum += 1;
+    }
+    cursor = slotEnd;
+  }
+  return slots;
+}
+
+// Split the configured school days into two PDF page groups (e.g. Mon-Wed / Thu-Fri).
+function splitDaysForPages(days: string[]): { days: string[]; label: string }[] {
+  const short = (d: string) => d.slice(0, 3);
+  const mid = Math.ceil(days.length / 2);
+  const groups: { days: string[]; label: string }[] = [];
+  const first = days.slice(0, mid);
+  const second = days.slice(mid);
+  if (first.length) groups.push({ days: first, label: first.map(short).join("-") });
+  if (second.length) groups.push({ days: second, label: second.map(short).join("-") });
+  return groups;
+}
 
 // ============================================
 // TYPES
@@ -328,7 +403,7 @@ function combineMultiSubjectEntries(entries: TimetableEntry[]): TimetableEntry[]
   return combined;
 }
 
-function buildPdfGrid(entries: TimetableEntry[], classList: Class[]): PdfGridRow[] {
+function buildPdfGrid(entries: TimetableEntry[], classList: Class[], schedule: ScheduleSlot[], days: string[]): PdfGridRow[] {
   const combinedEntries = combineMultiSubjectEntries(entries);
   const classNames = classList.map((c) => c.className);
 
@@ -338,8 +413,8 @@ function buildPdfGrid(entries: TimetableEntry[], classList: Class[]): PdfGridRow
   });
 
   const rows: PdfGridRow[] = [];
-  PDF_GRID_DAYS.forEach((day) => {
-    PDF_SCHEDULE.forEach((slot) => {
+  days.forEach((day) => {
+    schedule.forEach((slot) => {
       if (slot.type === "break") {
         rows.push({ day, period: "", duration: `${slot.start} - ${slot.end}`, isBreak: true, cells: {} });
         return;
@@ -360,7 +435,7 @@ function buildPdfGrid(entries: TimetableEntry[], classList: Class[]): PdfGridRow
   return rows;
 }
 
-function buildPaginatedPdfGrids(entries: TimetableEntry[], classList: Class[]): PdfGridRow[][] {
+function buildPaginatedPdfGrids(entries: TimetableEntry[], schedule: ScheduleSlot[], days: string[]): { label: string; rows: PdfGridRow[] }[] {
   const combinedEntries = combineMultiSubjectEntries(entries);
 
   const uniqueClassNames = new Set<string>();
@@ -377,15 +452,12 @@ function buildPaginatedPdfGrids(entries: TimetableEntry[], classList: Class[]): 
     index.set(key, e);
   });
 
-  const pageGroups = [
-    { days: ["Monday", "Tuesday", "Wednesday"], label: "Mon-Wed" },
-    { days: ["Thursday", "Friday"], label: "Thu-Fri" },
-  ];
+  const pageGroups = splitDaysForPages(days);
 
   return pageGroups.map((group) => {
     const rows: PdfGridRow[] = [];
     group.days.forEach((day) => {
-      PDF_SCHEDULE.forEach((slot) => {
+      schedule.forEach((slot) => {
         if (slot.type === "break") {
           rows.push({
             day,
@@ -414,7 +486,7 @@ function buildPaginatedPdfGrids(entries: TimetableEntry[], classList: Class[]): 
         });
       });
     });
-    return rows;
+    return { label: group.label, rows };
   });
 }
 
@@ -422,19 +494,19 @@ function buildPaginatedPdfGrids(entries: TimetableEntry[], classList: Class[]): 
 // BUILD MATRIX TIMETABLE WITH PDF_SCHEDULE TIME RANGES
 // ============================================
 
-function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[]): any {
+function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], schedule: ScheduleSlot[], schoolDays: string[]): any {
   const combinedEntries = combineMultiSubjectEntries(entries);
   const uniqueClasses = dedupeClassesByName(classList);
 
-  // Use PDF_SCHEDULE for time slots
-  const timeSlots = PDF_SCHEDULE.map(slot => ({
+  // Time slots come from the live schedule built from the database settings.
+  const timeSlots = schedule.map(slot => ({
     start: slot.start,
     end: slot.end,
     label: slot.label,
     isBreak: slot.type === "break"
   }));
 
-  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const days = schoolDays;
 
   const matrix: any = {};
   days.forEach(day => {
@@ -561,11 +633,12 @@ function generateMockData() {
   ];
 
   const mockEntries: TimetableEntry[] = [];
-  const periods = [1, 2, 3, 4, 5, 6];
-  const days = DAYS.slice(0, 5);
+  const schedule = buildScheduleFromSettings(DEFAULT_SCHOOL_SETTINGS);
+  const days = DEFAULT_SCHOOL_SETTINGS.schoolDays;
 
-  const timeSlots = PDF_SCHEDULE.filter(s => s.type === "period").map(s => s.start);
-  const endSlots = PDF_SCHEDULE.filter(s => s.type === "period").map(s => s.end);
+  const timeSlots = schedule.filter(s => s.type === "period").map(s => s.start);
+  const endSlots = schedule.filter(s => s.type === "period").map(s => s.end);
+  const periods = schedule.filter(s => s.type === "period").map(s => Number(s.label));
 
   mockTeachers.forEach((teacher, ti) => {
     days.forEach((day, di) => {
@@ -688,6 +761,13 @@ export function TimetableAdminPage() {
 
   const currentYear = new Date().getFullYear();
   const academicYear = "2026-2027";
+
+  // Live schedule + school days built from the settings stored in the database.
+  const schedule = useMemo(() => buildScheduleFromSettings(schoolSettings), [schoolSettings]);
+  const scheduleDays = useMemo(
+    () => (schoolSettings.schoolDays?.length ? schoolSettings.schoolDays : DEFAULT_SCHOOL_SETTINGS.schoolDays),
+    [schoolSettings]
+  );
 
   // ============================================
   // FETCH DATA
@@ -1405,7 +1485,7 @@ export function TimetableAdminPage() {
       if (filterTeacher) filteredForExport = filteredForExport.filter(e => e.teacherId === filterTeacher);
 
       const uniqueClasses = dedupeClassesByName(classes);
-      const grid = buildPdfGrid(filteredForExport, uniqueClasses);
+      const grid = buildPdfGrid(filteredForExport, uniqueClasses, schedule, scheduleDays);
 
       const container = document.createElement('div');
       container.style.position = 'fixed';
@@ -1542,7 +1622,7 @@ export function TimetableAdminPage() {
     } finally {
       setIsDownloadingPdf(false);
     }
-  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear, schedule, scheduleDays]);
 
   // ============================================
   // PDF DOWNLOAD - MATRIX FORMAT
@@ -1567,7 +1647,7 @@ export function TimetableAdminPage() {
       const classIds = new Set(filteredForExport.map(e => e.classId));
       const uniqueClasses = classes.filter(c => classIds.has(c._id));
 
-      const { matrix, days, timeSlots, labels, isBreak } = buildMatrixTimetable(filteredForExport, uniqueClasses);
+      const { matrix, days, timeSlots, labels, isBreak } = buildMatrixTimetable(filteredForExport, uniqueClasses, schedule, scheduleDays);
 
       const container = document.createElement('div');
       container.style.position = 'fixed';
@@ -1733,7 +1813,7 @@ export function TimetableAdminPage() {
     } finally {
       setIsDownloadingPdf(false);
     }
-  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear, schedule, scheduleDays]);
 
   // ============================================
   // PDF DOWNLOAD - PAGINATED
@@ -1766,7 +1846,7 @@ export function TimetableAdminPage() {
       });
       const uniqueClassNames = Array.from(classNamesSet).sort();
 
-      const pageGrids = buildPaginatedPdfGrids(filteredForExport, []);
+      const pageGrids = buildPaginatedPdfGrids(filteredForExport, schedule, scheduleDays);
 
       const container = document.createElement('div');
       container.style.position = 'fixed';
@@ -1800,8 +1880,8 @@ export function TimetableAdminPage() {
       }
 
       for (let pageIndex = 0; pageIndex < pageGrids.length; pageIndex++) {
-        const gridRows = pageGrids[pageIndex];
-        const pageLabel = pageIndex === 0 ? "Monday - Wednesday" : "Thursday - Friday";
+        const gridRows = pageGrids[pageIndex].rows;
+        const pageLabel = pageGrids[pageIndex].label;
 
         const pageClassNames = new Set<string>();
         gridRows.forEach(row => {
@@ -1902,7 +1982,7 @@ export function TimetableAdminPage() {
     } finally {
       setIsDownloadingPdf(false);
     }
-  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear]);
+  }, [entries, classes, teachers, filterClass, filterTeacher, academicYear, schedule, scheduleDays]);
 
   // ============================================
   // RENDER
