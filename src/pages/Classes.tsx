@@ -956,7 +956,7 @@ function ClassDialog({
   const set = <K extends keyof SchoolClass>(k: K, v: SchoolClass[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const classNames = ["Beginers", "Olevel 3", "Olevel 4", "Olevel 5", "Alevel", "Graduated"];
+  const classNames = ["Beginers1", "Beginers2", "Olevel 3", "Olevel 4", "Olevel 5", "Alevel", "Graduated"];
   const departments = ["General", "Science", "Arts", "Commercial"];
   const cycles = ["1st Cycle", "2nd Cycle"];
   const academicYears = ["2026-2027", "2027-2028", "2028-2029"];
