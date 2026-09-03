@@ -29,7 +29,7 @@ const DEFAULT_SCHOOL_SETTINGS = {
 };
 
 type ScheduleSlot = {
-  type: "period" | "break";
+  type: "period";
   label: string;
   start: string;
   end: string;
@@ -41,8 +41,14 @@ const minutesToTimeString = (m: number): string => {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 };
 
-// Build the day's period/break slots from the school settings in the database.
-// Same math as the backend generator (routes/timetable.js buildPeriodSlots).
+function formatEnglishTime(time: string): string {
+  const [hour, minute] = time.split(":").map(Number);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+// Build continuous teaching periods from the school settings in the database.
 function buildScheduleFromSettings(settings: {
   schoolStartTime: string;
   schoolEndTime: string;
@@ -53,37 +59,23 @@ function buildScheduleFromSettings(settings: {
 }): ScheduleSlot[] {
   const start = timeStringToMinutes(settings.schoolStartTime);
   const end = timeStringToMinutes(settings.schoolEndTime);
-  const brkS = timeStringToMinutes(settings.breakStart);
-  const brkE = timeStringToMinutes(settings.breakEnd);
   const dur = settings.periodDurationMinutes || 45;
   const maxPeriods = settings.periodsPerDay || 12;
 
   const slots: ScheduleSlot[] = [];
   let cursor = start;
   let periodNum = 1;
-  let breakAdded = false;
 
   while (cursor + dur <= end && periodNum <= maxPeriods) {
     const slotStart = cursor;
     const slotEnd = cursor + dur;
-    const overlapsBreak = slotStart < brkE && slotEnd > brkS;
-    if (overlapsBreak && !breakAdded) {
-      slots.push({
-        type: "break",
-        label: "BREAK TIME",
-        start: minutesToTimeString(brkS),
-        end: minutesToTimeString(brkE),
-      });
-      breakAdded = true;
-    } else if (!overlapsBreak) {
-      slots.push({
-        type: "period",
-        label: String(periodNum),
-        start: minutesToTimeString(slotStart),
-        end: minutesToTimeString(slotEnd),
-      });
-      periodNum += 1;
-    }
+    slots.push({
+      type: "period",
+      label: String(periodNum),
+      start: minutesToTimeString(slotStart),
+      end: minutesToTimeString(slotEnd),
+    });
+    periodNum += 1;
     cursor = slotEnd;
   }
   return slots;
@@ -405,24 +397,20 @@ function combineMultiSubjectEntries(entries: TimetableEntry[]): TimetableEntry[]
 
 function buildPdfGrid(entries: TimetableEntry[], classList: Class[], schedule: ScheduleSlot[], days: string[]): PdfGridRow[] {
   const combinedEntries = combineMultiSubjectEntries(entries);
-  const classNames = classList.map((c) => c.className);
+  const classIds = classList.map((c) => c._id);
 
   const index = new Map<string, TimetableEntry>();
   combinedEntries.forEach((e) => {
-    index.set(`${e.day}|${e.startTime}|${e.className}`, e);
+    index.set(`${e.day}|${e.startTime}|${e.classId}`, e);
   });
 
   const rows: PdfGridRow[] = [];
   days.forEach((day) => {
     schedule.forEach((slot) => {
-      if (slot.type === "break") {
-        rows.push({ day, period: "", duration: `${slot.start} - ${slot.end}`, isBreak: true, cells: {} });
-        return;
-      }
       const cells: Record<string, PdfGridCell | null> = {};
-      classNames.forEach((cls) => {
-        const entry = index.get(`${day}|${slot.start}|${cls}`);
-        cells[cls] = entry ? {
+      classIds.forEach((classId) => {
+        const entry = index.get(`${day}|${slot.start}|${classId}`);
+        cells[classId] = entry ? {
           subjectName: entry.subjectName,
           teacherName: entry.teacherName,
           room: entry.room
@@ -438,17 +426,11 @@ function buildPdfGrid(entries: TimetableEntry[], classList: Class[], schedule: S
 function buildPaginatedPdfGrids(entries: TimetableEntry[], schedule: ScheduleSlot[], days: string[]): { label: string; rows: PdfGridRow[] }[] {
   const combinedEntries = combineMultiSubjectEntries(entries);
 
-  const uniqueClassNames = new Set<string>();
-  combinedEntries.forEach(e => {
-    const className = e.className || 'Unknown';
-    uniqueClassNames.add(className);
-  });
-
-  const classNames = Array.from(uniqueClassNames).sort();
+  const classIds = Array.from(new Set(combinedEntries.map((e) => e.classId))).sort();
 
   const index = new Map<string, TimetableEntry>();
   combinedEntries.forEach((e) => {
-    const key = `${e.day}|${e.startTime}|${e.className}`;
+    const key = `${e.day}|${e.startTime}|${e.classId}`;
     index.set(key, e);
   });
 
@@ -458,20 +440,10 @@ function buildPaginatedPdfGrids(entries: TimetableEntry[], schedule: ScheduleSlo
     const rows: PdfGridRow[] = [];
     group.days.forEach((day) => {
       schedule.forEach((slot) => {
-        if (slot.type === "break") {
-          rows.push({
-            day,
-            period: "",
-            duration: `${slot.start} - ${slot.end}`,
-            isBreak: true,
-            cells: {}
-          });
-          return;
-        }
         const cells: Record<string, PdfGridCell | null> = {};
-        classNames.forEach((cls) => {
-          const entry = index.get(`${day}|${slot.start}|${cls}`);
-          cells[cls] = entry ? {
+        classIds.forEach((classId) => {
+          const entry = index.get(`${day}|${slot.start}|${classId}`);
+          cells[classId] = entry ? {
             subjectName: entry.subjectName,
             teacherName: entry.teacherName,
             room: entry.room
@@ -503,7 +475,7 @@ function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], sch
     start: slot.start,
     end: slot.end,
     label: slot.label,
-    isBreak: slot.type === "break"
+    isBreak: false
   }));
 
   const days = schoolDays;
@@ -574,8 +546,8 @@ function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], sch
     start: slot.start,
     end: slot.end,
     label: slot.label,
-    isBreak: slot.isBreak,
-    display: slot.isBreak ? slot.label : `${slot.start} - ${slot.end}`
+    isBreak: false,
+    display: `${slot.start} - ${slot.end}`
   }));
 
   return {
@@ -584,7 +556,7 @@ function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], sch
     timeSlots: displayTimeSlots,
     rawTimeSlots: timeSlots,
     labels: timeSlots.map(s => s.label),
-    isBreak: timeSlots.map(s => s.isBreak),
+    isBreak: timeSlots.map(() => false),
     classes: uniqueClasses
   };
 }
@@ -604,6 +576,11 @@ function dedupeClassesByName(classList: Class[]): Class[] {
     }
   });
   return result;
+}
+
+function getClassDisplayName(classItem?: Class, fallback = "Unknown Class") {
+  if (!classItem) return fallback;
+  return classItem.department ? `${classItem.className} ${classItem.department}` : classItem.className;
 }
 
 function generateMockData() {
@@ -764,10 +741,10 @@ export function TimetableAdminPage() {
 
   // Live schedule + school days built from the settings stored in the database.
   const schedule = useMemo(() => buildScheduleFromSettings(schoolSettings), [schoolSettings]);
-  const scheduleDays = useMemo(
-    () => (schoolSettings.schoolDays?.length ? schoolSettings.schoolDays : DEFAULT_SCHOOL_SETTINGS.schoolDays),
-    [schoolSettings]
-  );
+  const scheduleDays = useMemo(() => {
+    const configured = schoolSettings.schoolDays?.length ? schoolSettings.schoolDays : DEFAULT_SCHOOL_SETTINGS.schoolDays;
+    return DAYS.filter((day) => configured.includes(day));
+  }, [schoolSettings]);
 
   // ============================================
   // FETCH DATA
@@ -1087,16 +1064,7 @@ export function TimetableAdminPage() {
     setFilterTeacher("");
   }, []);
 
-  const uniqueClasses = useMemo(() => {
-    const classMap = new Map<string, Class>();
-    classes.forEach(c => {
-      const fullName = c.department ? `${c.className} ${c.department}` : c.className;
-      if (!classMap.has(fullName)) {
-        classMap.set(fullName, c);
-      }
-    });
-    return Array.from(classMap.values());
-  }, [classes]);
+  const uniqueClasses = useMemo(() => classes, [classes]);
 
   // ============================================
   // CRUD OPERATIONS
@@ -1508,19 +1476,19 @@ export function TimetableAdminPage() {
 
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
-          <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #D4AF37; padding-bottom: 8px;">
-            <h2 style="font-size: 18px; margin: 0; color: #D4AF37; font-weight: 800;">BELMON BILINGUAL HIGH SCHOOL</h2>
+          <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #0b5321; padding-bottom: 8px;">
+            <h2 style="font-size: 18px; margin: 0; color: #0b5321; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
             <p style="font-size: 11px; color: #666; margin: 3px 0;">Timetable • ${academicYear}${filterLabel}</p>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
             <thead>
-              <tr style="background: #D4AF37; color: white;">
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Period</th>
+              <tr style="background: #0b5321; color: white;">
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Period</th>
                 ${uniqueClasses.map((c) => `
-                  <th style="padding: 6px 8px; text-align: center; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">${c.department ? `${c.className} ${c.department}` : c.className}</th>
+                  <th style="padding: 6px 8px; text-align: center; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">${c.department ? `${c.className} ${c.department}` : c.className}</th>
                 `).join('')}
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #D4AF37; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
               </tr>
             </thead>
             <tbody>
@@ -1531,21 +1499,17 @@ export function TimetableAdminPage() {
         const dayRowspan = grid.filter((r) => r.day === row.day).length;
 
         htmlContent += `
-          <tr style="${row.isBreak ? 'background: #fef3c7;' : ''}">
+          <tr>
             ${isFirstOfDay ? `
               <td style="padding: 6px 8px; font-weight: 600; text-align: center; vertical-align: middle; border: 1px solid #ddd; background: #faf5e8;" rowspan="${dayRowspan}">
                 ${row.day}
               </td>
             ` : ''}
-            <td style="padding: 6px 8px; text-align: center; font-weight: 600; font-family: monospace; border: 1px solid #000000; ${row.isBreak ? 'color: #b45309;' : ''}">
-              ${row.isBreak ? '' : row.period}
+            <td style="padding: 6px 8px; text-align: center; font-weight: 600; font-family: monospace; border: 1px solid #000000;">
+              ${row.period}
             </td>
-            ${row.isBreak ? `
-              <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000; background: #fef3c7;" colspan="${uniqueClasses.length}">
-                <span style="font-size: 11px; font-weight: 700; color: #000000; text-transform: uppercase; letter-spacing: 1px;">BREAK TIME</span>
-              </td>
-            ` : uniqueClasses.map((c) => {
-          const cell = row.cells[c.className];
+            ${uniqueClasses.map((c) => {
+          const cell = row.cells[c._id];
           return `
                 <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000;">
                   ${cell ? `
@@ -1557,7 +1521,7 @@ export function TimetableAdminPage() {
               `;
         }).join('')}
             <td style="padding: 6px 8px; text-align: center; font-size: 10px; border: 1px solid #ddd; white-space: nowrap;">
-              ${row.duration}
+              ${row.duration.split(" - ").map(formatEnglishTime).join(" - ")}
             </td>
           </tr>
         `;
@@ -1647,7 +1611,7 @@ export function TimetableAdminPage() {
       const classIds = new Set(filteredForExport.map(e => e.classId));
       const uniqueClasses = classes.filter(c => classIds.has(c._id));
 
-      const { matrix, days, timeSlots, labels, isBreak } = buildMatrixTimetable(filteredForExport, uniqueClasses, schedule, scheduleDays);
+      const { matrix, days, timeSlots, labels } = buildMatrixTimetable(filteredForExport, uniqueClasses, schedule, scheduleDays);
 
       const container = document.createElement('div');
       container.style.position = 'fixed';
@@ -1677,7 +1641,7 @@ export function TimetableAdminPage() {
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
           <div style="text-align: center; margin-bottom: 15px; border-bottom: 3px solid #000000; padding-bottom: 12px;">
-            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">BELMON BILINGUAL HIGH SCHOOL</h1>
+            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h1>
             <p style="font-size: 13px; color: #666; margin: 4px 0 0 0;">TIMETABLE • ${academicYear}</p>
             <p style="font-size: 12px; color: #888; margin: 2px 0 0 0;">Classes: ${classNames || 'All Classes'}</p>
           </div>
@@ -1698,33 +1662,23 @@ export function TimetableAdminPage() {
             <tbody>
       `;
 
-      // Use the labels and isBreak from the matrix
       const matrixLabels = labels;
-      const matrixIsBreak = isBreak;
 
       timeSlots.forEach((slot: any, idx: number) => {
-        const isBreakRow = matrixIsBreak[idx] || false;
         const label = matrixLabels[idx] || slot.label;
-        const displayLabel = isBreakRow ? 'BREAK' : label;
-
-        const rowBg = isBreakRow ? 'background: #fef3c7;' : (idx % 2 === 0 ? 'background: #fafafa;' : 'background: white;');
+        const rowBg = idx % 2 === 0 ? 'background: #fafafa;' : 'background: white;';
 
         htmlContent += `
           <tr style="${rowBg}">
-            <td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; font-weight: 700; font-size: 12px; ${isBreakRow ? 'color: #b45309; background: #fef3c7;' : ''}">
-              <div style="font-size: 13px; font-weight: 800;">${displayLabel}</div>
-              ${!isBreakRow ? `<div style="font-size: 9px; color: #000000; font-weight: 400;">${slot.start} - ${slot.end}</div>` : ''}
+            <td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; font-weight: 700; font-size: 12px;">
+              <div style="font-size: 13px; font-weight: 800;">${label}</div>
+              <div style="font-size: 9px; color: #000000; font-weight: 400;">${formatEnglishTime(slot.start)} - ${formatEnglishTime(slot.end)}</div>
             </td>
             ${days.map((day: string) => {
           const slotData = matrix[day]?.[slot.start];
           if (!slotData || slotData.entries.length === 0) {
-            return `<td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; ${isBreakRow ? 'background: #fef3c7;' : ''}">
+            return `<td style="padding: 10px 12px; text-align: center; border: 1px solid #000000;">
                   <span style="color: #000000; font-size: 14px;">-</span>
-                </td>`;
-          }
-          if (isBreakRow) {
-            return `<td style="padding: 10px 12px; text-align: center; border: 1px solid #000000; background: #fef3c7; color: #000000; font-weight: 700; font-size: 11px; letter-spacing: 1px;">
-                  BREAK
                 </td>`;
           }
 
@@ -1755,7 +1709,7 @@ export function TimetableAdminPage() {
           <div style="text-align: center; margin-top: 12px; font-size: 9px; color: #000000; border-top: 1px solid #000000; padding-top: 10px;">
             <span>Generated: ${new Date().toLocaleString()}</span>
             <span style="margin: 0 15px;">|</span>
-            <span>BELMON BILINGUAL HIGH SCHOOL</span>
+            <span>MA NDUM FAVOURED EVENING SECONDARY SCHOOL</span>
             <span style="margin: 0 15px;">|</span>
             <span>Page 1 of 1</span>
           </div>
@@ -1814,6 +1768,106 @@ export function TimetableAdminPage() {
       setIsDownloadingPdf(false);
     }
   }, [entries, classes, teachers, filterClass, filterTeacher, academicYear, schedule, scheduleDays]);
+
+  const downloadClassReportsPDF = useCallback(async () => {
+    setIsDownloadingPdf(true);
+    let container: HTMLDivElement | null = null;
+    try {
+      const res = await axios.get(`${API_BASE}/timetable`).catch(() => null);
+      const rawEntries = res?.data?.success ? res.data.data : null;
+      const freshEntries: TimetableEntry[] = rawEntries ? rawEntries.map(mapApiEntry) : entries;
+      const filteredEntries = freshEntries.filter((entry) =>
+        (!filterClass || entry.classId === filterClass) &&
+        (!filterTeacher || entry.teacherId === filterTeacher)
+      );
+
+      if (filteredEntries.length === 0) {
+        toast.error("No timetable entries to export");
+        return;
+      }
+
+      const classMap = new Map<string, { className: string; entries: TimetableEntry[] }>();
+      filteredEntries.forEach((entry) => {
+        const classItem = classes.find((item) => item._id === entry.classId);
+        const className = getClassDisplayName(classItem, entry.className);
+        const current = classMap.get(entry.classId) || { className, entries: [] };
+        current.entries.push(entry);
+        classMap.set(entry.classId, current);
+      });
+
+      container = document.createElement("div");
+      container.style.position = "fixed";
+      container.style.top = "0";
+      container.style.left = "-9999px";
+      container.style.width = "1100px";
+      container.style.backgroundColor = "white";
+      container.style.padding = "20px";
+      document.body.appendChild(container);
+
+      const { default: jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+
+      let pageIndex = 0;
+      for (const report of classMap.values()) {
+        const combinedEntries = combineMultiSubjectEntries(report.entries);
+        const cells = new Map<string, TimetableEntry>();
+        combinedEntries.forEach((entry) => cells.set(`${entry.day}|${entry.startTime}`, entry));
+
+        container.innerHTML = `
+          <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
+            <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000; padding-bottom: 8px;">
+              <h2 style="font-size: 18px; margin: 0; color: #000; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
+              <p style="font-size: 14px; font-weight: 700; color: #000; margin: 4px 0;">CLASS TIMETABLE: ${report.className}</p>
+              <p style="font-size: 11px; color: #000; margin: 3px 0;">Academic Year ${academicYear}</p>
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 11px; border: 2px solid #000;">
+              <thead><tr style="background: #000; color: white;">
+                <th style="padding: 7px; border: 1px solid #000;">Period</th>
+                <th style="padding: 7px; border: 1px solid #000;">Time</th>
+                ${scheduleDays.map((day) => `<th style="padding: 7px; border: 1px solid #000;">${day}</th>`).join("")}
+              </tr></thead>
+              <tbody>
+                ${schedule.map((slot) =>
+          `<tr><td style="padding:7px; text-align:center; border:1px solid #000; font-weight:700;">${slot.label}</td><td style="padding:7px; text-align:center; border:1px solid #000; white-space:nowrap;">${formatEnglishTime(slot.start)} - ${formatEnglishTime(slot.end)}</td>${scheduleDays.map((day) => {
+            const entry = cells.get(`${day}|${slot.start}`);
+            return `<td style="padding:7px; text-align:center; border:1px solid #000;">${entry ? `<strong>${entry.subjectName}</strong><br><small>${entry.teacherName}</small>` : "-"}</td>`;
+          }).join("")}</tr>`
+        ).join("")}
+              </tbody>
+            </table>
+            <div style="text-align:center; margin-top:8px; font-size:9px; color:#666;">Generated: ${new Date().toLocaleString()} | Report ${pageIndex + 1} of ${classMap.size}</div>
+          </div>`;
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const canvas = await html2canvas(container, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false,
+          width: container.scrollWidth,
+          height: container.scrollHeight,
+          onclone: (_doc, element) => flattenUnsupportedColors(element),
+        });
+        if (pageIndex > 0) pdf.addPage();
+        const imgWidth = pageWidth - margin * 2;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", margin, margin, imgWidth, Math.min(imgHeight, pageHeight - margin * 2));
+        pageIndex += 1;
+      }
+
+      pdf.save(`class_timetables_${new Date().toISOString().split("T")[0]}.pdf`);
+      toast.success(`${classMap.size} class timetable report(s) downloaded`);
+    } catch (error) {
+      console.error("Error downloading class timetable reports:", error);
+      toast.error(`Failed to download class reports: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      if (container?.parentNode) container.parentNode.removeChild(container);
+      setIsDownloadingPdf(false);
+    }
+  }, [entries, classes, filterClass, filterTeacher, academicYear, schedule, scheduleDays]);
 
   // ============================================
   // PDF DOWNLOAD - PAGINATED
@@ -1892,15 +1946,15 @@ export function TimetableAdminPage() {
         let htmlContent = `
           <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
             <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000000; padding-bottom: 8px;">
-              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">BELMON BILINGUAL HIGH SCHOOL</h2>
+              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
               <p style="font-size: 11px; font-weight:bold; color: #000000; margin: 3px 0;">Timetable • ${academicYear}${filterLabel} • ${pageLabel}</p>
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
               <thead>
                 <tr style="background: #000000; color: white;">
                   <th style="padding: 6px 8px; text-align: left; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
-                  ${pageClassList.map((cls) => `
-                    <th style="padding: 6px 8px; text-align: center; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">${cls}</th>
+                    ${pageClassList.map((classId) => `
+                    <th style="padding: 6px 8px; text-align: center; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">${getClassDisplayName(classes.find((classItem) => classItem._id === classId), classId)}</th>
                   `).join('')}
                   <th style="padding: 6px 8px; text-align: left; border: 1px solid #000000; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
                 </tr>
@@ -1913,19 +1967,15 @@ export function TimetableAdminPage() {
           const dayRowspan = gridRows.filter((r) => r.day === row.day).length;
 
           htmlContent += `
-            <tr style="${row.isBreak ? 'background: #fef3c7;' : ''}">
+            <tr>
               ${isFirstOfDay ? `
                 <td style="padding: 6px 8px; font-weight: 600; text-align: center; vertical-align: middle; font-weight:bold; border: 1px solid #000000; background: #faf5e8;" rowspan="${dayRowspan}">
                   ${row.day}
                 </td>
               ` : ''}
 
-              ${row.isBreak ? `
-                <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000; background: #fef3c7;" colspan="${pageClassList.length}">
-                  <span style="font-size: 11px; font-weight: bold; color: #000000;  text-transform: uppercase; letter-spacing: 1px;">BREAK TIME</span>
-                </td>
-              ` : pageClassList.map((cls) => {
-            const cell = row.cells[cls];
+              ${pageClassList.map((classId) => {
+            const cell = row.cells[classId];
             return `
                   <td style="padding: 6px 8px; text-align: center; border: 1px solid #000000;">
                     ${cell ? `
@@ -1936,7 +1986,7 @@ export function TimetableAdminPage() {
                 `;
           }).join('')}
               <td style="padding: 6px 8px; text-align: center; font-size: 10px; border: 1px solid #000000; white-space: nowrap;">
-                ${row.duration}
+                ${row.duration.split(" - ").map(formatEnglishTime).join(" - ")}
               </td>
             </tr>
           `;
@@ -2140,6 +2190,14 @@ export function TimetableAdminPage() {
               >
                 <CalendarDays className="size-4" />
                 Paginated (Mon-Wed / Thu-Fri)
+              </button>
+              <button
+                onClick={downloadClassReportsPDF}
+                disabled={isDownloadingPdf}
+                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-b-xl flex items-center gap-2"
+              >
+                <FileSpreadsheet className="size-4" />
+                One Report Per Class
               </button>
             </div>
           </div>
@@ -2662,14 +2720,12 @@ export function SetupWizard({
   const computedPeriods = useMemo(() => {
     const start = timeStringToMinutes(settings.schoolStartTime);
     const end = timeStringToMinutes(settings.schoolEndTime);
-    const brkS = timeStringToMinutes(settings.breakStart);
-    const brkE = timeStringToMinutes(settings.breakEnd);
     const dur = settings.periodDurationMinutes;
     let count = 0, cursor = start, periodNum = 1;
     while (cursor + dur <= end && periodNum <= (settings.periodsPerDay || 20)) {
-      const s = cursor, e = cursor + dur;
-      if (!(s < brkE && e > brkS)) { count += 1; periodNum += 1; }
-      cursor = e;
+      count += 1;
+      periodNum += 1;
+      cursor += dur;
     }
     return count;
   }, [settings]);
@@ -2743,8 +2799,8 @@ export function SetupWizard({
               onClick={() => tab !== "teachers" && setActiveTab(tab)}
               disabled={tab === "teachers" ? false : activeTab === "teachers"}
               className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${activeTab === tab
-                  ? "border-brand text-brand"
-                  : "border-transparent text-black/40 hover:text-black cursor-pointer"
+                ? "border-brand text-brand"
+                : "border-transparent text-black/40 hover:text-black cursor-pointer"
                 }`}
             >
               {tab === "teachers" ? "Teacher Availability" : tab === "schedule" ? "School Schedule" : "Generate"}
@@ -2957,14 +3013,6 @@ function ScheduleSettingsTab({
           <input type="time" value={settings.schoolEndTime}
             onChange={(e) => set("schoolEndTime", e.target.value)} className={inputCls} required />
         </Field>
-        <Field label="Break Start*">
-          <input type="time" value={settings.breakStart}
-            onChange={(e) => set("breakStart", e.target.value)} className={inputCls} required />
-        </Field>
-        <Field label="Break End*">
-          <input type="time" value={settings.breakEnd}
-            onChange={(e) => set("breakEnd", e.target.value)} className={inputCls} required />
-        </Field>
       </div>
       <div className="space-y-4">
         <Field label="Period Duration (minutes)*">
@@ -3001,10 +3049,9 @@ function ScheduleSettingsTab({
         </Field>
         <Field label="Preview">
           <div className="p-3 bg-stone-50 rounded-lg text-sm">
-            <div>Periods per day (excluding breaks): <strong>{computedPeriods}</strong></div>
+            <div>Periods per day: <strong>{computedPeriods}</strong></div>
             <div className="text-xs text-black/50 mt-1">
-              Based on {settings.schoolStartTime}–{settings.schoolEndTime} with a break
-              {settings.breakStart}–{settings.breakEnd} and {settings.periodDurationMinutes}min periods.
+              Based on {settings.schoolStartTime}–{settings.schoolEndTime} with {settings.periodDurationMinutes}min periods.
             </div>
           </div>
         </Field>
@@ -3252,11 +3299,10 @@ const CalendarView = memo(function CalendarView({
           </thead>
           <tbody>
             {schedule.map((slot) => {
-              const isBreak = slot.type === "break";
               return (
-                <tr key={slot.start} className={`border-t border-stone-100 ${isBreak ? 'bg-amber-50' : ''}`}>
-                  <td className={`px-2 py-2 text-xs text-black/40 font-medium text-center ${isBreak ? 'text-amber-600 font-bold' : ''}`}>
-                    {isBreak ? 'BREAK' : `${slot.start} - ${slot.end}`}
+                <tr key={slot.start} className="border-t border-stone-100">
+                  <td className="px-2 py-2 text-xs text-black/40 font-medium text-center">
+                    {formatEnglishTime(slot.start)} - {formatEnglishTime(slot.end)}
                   </td>
                   {days.map((day) => {
                     const dayEntries = entries.filter(e =>
@@ -3372,138 +3418,34 @@ function TimetableEntryModal({
           </button>
         </div>
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="Day*">
-            <select value={form.day} onChange={(e) => set("day", e.target.value)} className={inputCls}>
-              {DAYS.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Period Number*">
-            <input
-              type="number"
-              value={form.periodNumber}
-              onChange={(e) => set("periodNumber", parseInt(e.target.value) || 1)}
-              className={inputCls}
-              min="1"
-              max="8"
-            />
-          </Field>
-
-          <Field label="Start Time*">
-            <input
-              type="time"
-              value={form.startTime}
-              onChange={(e) => set("startTime", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-
-          <Field label="End Time*">
-            <input
-              type="time"
-              value={form.endTime}
-              onChange={(e) => set("endTime", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-
-          <Field label="Teacher*">
-            <select
-              value={form.teacherId}
-              onChange={(e) => {
-                const teacher = teachers.find((t) => t._id === e.target.value);
-                set("teacherId", e.target.value);
-                set("teacherName", teacher?.name || "");
-              }}
-              className={inputCls}
-            >
-              <option value="">Select Teacher</option>
-              {teachers.map((t) => (
-                <option key={t._id} value={t._id}>{t.name}</option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Class*">
-            <select
-              value={form.classId}
-              onChange={(e) => {
-                const cls = classes.find((c) => c._id === e.target.value);
-                set("classId", e.target.value);
-                set("className", cls?.className || "");
-              }}
-              className={inputCls}
-            >
-              <option value="">Select Class</option>
-              {classes.map((c) => (
-                <option key={c._id} value={c._id}>
-                  {c.department ? `${c.className} ${c.department}` : c.className}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Subject*">
-            <select
-              value={form.subjectId}
-              onChange={(e) => {
-                const subj = subjects.find((s) => s._id === e.target.value);
-                set("subjectId", e.target.value);
-                set("subjectName", subj?.name || "");
-                set("subjectCode", subj?.code || "");
-              }}
-              className={inputCls}
-            >
-              <option value="">Select Subject</option>
-              {subjects.map((s) => (
-                <option key={s._id} value={s._id}>{s.name} ({s.code})</option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Cycle*">
-            <select
-              value={form.cycle}
-              onChange={(e) => {
-                const cycle = e.target.value as "first" | "second";
-                set("cycle", cycle);
-                set("ratePerPeriod", CYCLE_RATES[cycle]);
-              }}
-              className={inputCls}
-            >
-              <option value="first">First Cycle ({CYCLE_RATES.first} FRS)</option>
-              <option value="second">Second Cycle ({CYCLE_RATES.second} FRS)</option>
-            </select>
-          </Field>
-
-          <Field label="Room">
-            <input type="text" value={form.room || ""} onChange={(e) => set("room", e.target.value)} className={inputCls} placeholder="Room number" />
-          </Field>
-
-          <Field label="Academic Year">
-            <input
-              type="text"
-              value={form.academicYear}
-              onChange={(e) => set("academicYear", e.target.value)}
-              className={inputCls}
-              placeholder="2026-2027"
-            />
-          </Field>
-
-          <div className="sm:col-span-2 bg-stone-50 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Rate per Period:</span>
-              <span className="text-xl font-bold text-brand">{form.ratePerPeriod} FRS</span>
-            </div>
-            <p className="text-xs text-black/40 mt-1">
-              {form.cycle === "first"
-                ? `First cycle rate: ${CYCLE_RATES.first} FRS per period`
-                : `Second cycle rate: ${CYCLE_RATES.second} FRS per period`}
-            </p>
-          </div>
+        <div className="overflow-x-auto rounded-xl border border-stone-200">
+          <table className="w-full min-w-[1100px] text-left">
+            <thead className="bg-stone-50">
+              <tr>
+                {['Day', 'Period', 'Start', 'End', 'Teacher', 'Class', 'Subject', 'Cycle', 'Room', 'Academic Year'].map((label) => (
+                  <th key={label} className="px-3 py-3 text-[10px] uppercase tracking-wider font-bold text-black/50 whitespace-nowrap">{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="align-top">
+                <td className="p-2"><select value={form.day} onChange={(e) => set("day", e.target.value)} className={inputCls}>{DAYS.map((d) => <option key={d} value={d}>{d}</option>)}</select></td>
+                <td className="p-2"><input type="number" value={form.periodNumber} onChange={(e) => set("periodNumber", parseInt(e.target.value) || 1)} className={inputCls} min="1" /></td>
+                <td className="p-2"><input type="time" value={form.startTime} onChange={(e) => set("startTime", e.target.value)} className={inputCls} /></td>
+                <td className="p-2"><input type="time" value={form.endTime} onChange={(e) => set("endTime", e.target.value)} className={inputCls} /></td>
+                <td className="p-2"><select value={form.teacherId} onChange={(e) => { const teacher = teachers.find((t) => t._id === e.target.value); set("teacherId", e.target.value); set("teacherName", teacher?.name || ""); }} className={inputCls}><option value="">Select Teacher</option>{teachers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select></td>
+                <td className="p-2"><select value={form.classId} onChange={(e) => { const cls = classes.find((c) => c._id === e.target.value); set("classId", e.target.value); set("className", getClassDisplayName(cls, "")); }} className={inputCls}><option value="">Select Class</option>{classes.map((c) => <option key={c._id} value={c._id}>{getClassDisplayName(c)}</option>)}</select></td>
+                <td className="p-2"><select value={form.subjectId} onChange={(e) => { const subj = subjects.find((s) => s._id === e.target.value); set("subjectId", e.target.value); set("subjectName", subj?.name || ""); set("subjectCode", subj?.code || ""); }} className={inputCls}><option value="">Select Subject</option>{subjects.map((s) => <option key={s._id} value={s._id}>{s.name} ({s.code})</option>)}</select></td>
+                <td className="p-2"><select value={form.cycle} onChange={(e) => { const cycle = e.target.value as "first" | "second"; set("cycle", cycle); set("ratePerPeriod", CYCLE_RATES[cycle]); }} className={inputCls}><option value="first">1st</option><option value="second">2nd</option></select></td>
+                <td className="p-2"><input type="text" value={form.room || ""} onChange={(e) => set("room", e.target.value)} className={inputCls} placeholder="Room" /></td>
+                <td className="p-2"><input type="text" value={form.academicYear} onChange={(e) => set("academicYear", e.target.value)} className={inputCls} /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 text-sm">
+          <span className="font-medium">Rate per period</span>
+          <span className="font-bold text-brand">{form.ratePerPeriod} FRS</span>
         </div>
 
         <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
@@ -3838,14 +3780,12 @@ function SchoolSettingsModal({
   const computedPeriods = useMemo(() => {
     const start = timeStringToMinutes(form.schoolStartTime);
     const end = timeStringToMinutes(form.schoolEndTime);
-    const brkS = timeStringToMinutes(form.breakStart);
-    const brkE = timeStringToMinutes(form.breakEnd);
     const dur = form.periodDurationMinutes;
     let count = 0, cursor = start, periodNum = 1;
     while (cursor + dur <= end && periodNum <= (form.periodsPerDay || 20)) {
-      const s = cursor, e = cursor + dur;
-      if (!(s < brkE && e > brkS)) { count += 1; periodNum += 1; }
-      cursor = e;
+      count += 1;
+      periodNum += 1;
+      cursor += dur;
     }
     return count;
   }, [form]);
@@ -3853,10 +3793,6 @@ function SchoolSettingsModal({
   const handleSave = async () => {
     if (timeStringToMinutes(form.schoolStartTime) >= timeStringToMinutes(form.schoolEndTime)) {
       toast.error("School start time must be before end time");
-      return;
-    }
-    if (timeStringToMinutes(form.breakStart) >= timeStringToMinutes(form.breakEnd)) {
-      toast.error("Break start must be before break end");
       return;
     }
     if (form.schoolDays.length === 0) {
@@ -3867,8 +3803,8 @@ function SchoolSettingsModal({
     const ok = await onSave({
       schoolStartTime: form.schoolStartTime,
       schoolEndTime: form.schoolEndTime,
-      breakStart: form.breakStart,
-      breakEnd: form.breakEnd,
+      breakStart: settings.breakStart,
+      breakEnd: settings.breakEnd,
       periodDurationMinutes: form.periodDurationMinutes,
       schoolDays: form.schoolDays,
       periodsPerDay: form.periodsPerDay,
@@ -3902,12 +3838,6 @@ function SchoolSettingsModal({
           <Field label="School End Time*">
             <input type="time" value={form.schoolEndTime} onChange={(e) => set("schoolEndTime", e.target.value)} className={inputCls} />
           </Field>
-          <Field label="Break Start*">
-            <input type="time" value={form.breakStart} onChange={(e) => set("breakStart", e.target.value)} className={inputCls} />
-          </Field>
-          <Field label="Break End*">
-            <input type="time" value={form.breakEnd} onChange={(e) => set("breakEnd", e.target.value)} className={inputCls} />
-          </Field>
           <Field label="Period Duration (minutes)*">
             <input type="number" min={10} max={120} value={form.periodDurationMinutes}
               onChange={(e) => set("periodDurationMinutes", Math.max(10, Math.min(120, Number(e.target.value) || 45)))}
@@ -3935,9 +3865,9 @@ function SchoolSettingsModal({
             </Field>
           </div>
           <div className="sm:col-span-2 p-3 bg-stone-50 rounded-xl text-sm">
-            <div>Periods per day (excluding break): <strong>{computedPeriods}</strong></div>
+            <div>Periods per day: <strong>{computedPeriods}</strong></div>
             <div className="text-xs text-black/50 mt-1">
-              Based on {form.schoolStartTime}–{form.schoolEndTime} with break {form.breakStart}–{form.breakEnd} and {form.periodDurationMinutes}-minute periods.
+              Based on {form.schoolStartTime}–{form.schoolEndTime} with {form.periodDurationMinutes}-minute periods.
             </div>
           </div>
         </div>
