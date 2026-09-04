@@ -9,7 +9,7 @@ import {
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = "https://belmon-backend-t71t.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
 
 // ============================================
 // TYPES
@@ -160,18 +160,14 @@ interface DaySlot {
 /**
  * Build the day's display slots from the saved school schedule using the
  * EXACT same math as the backend generator (routes/timetable.js buildPeriodSlots):
- * periods stride `periodDurationMinutes` from `schoolStartTime`, skipping any
- * slot overlapping the break window, capped by `periodsPerDay` and `schoolEndTime`.
- * A break row is inserted at its chronological position for display.
+ * periods stride `periodDurationMinutes` from `schoolStartTime`, capped by
+ * `periodsPerDay` and `schoolEndTime`.
  */
 function buildDaySlots(settings: SchoolSettings): DaySlot[] {
   const slots: DaySlot[] = [];
   const startMin = timeStringToMinutes(settings.schoolStartTime);
   const endMin = timeStringToMinutes(settings.schoolEndTime);
-  const breakStart = timeStringToMinutes(settings.breakStart);
-  const breakEnd = timeStringToMinutes(settings.breakEnd);
   const duration = settings.periodDurationMinutes || 45;
-  const hasBreak = breakEnd > breakStart;
   const maxPeriods = settings.periodsPerDay || 20;
 
   let cursor = startMin;
@@ -181,30 +177,14 @@ function buildDaySlots(settings: SchoolSettings): DaySlot[] {
     const slotStart = cursor;
     const slotEnd = cursor + duration;
 
-    // Same overlap rule as the backend: skip slots that overlap the break.
-    const overlapsBreak = hasBreak && slotStart < breakEnd && slotEnd > breakStart;
-
-    if (overlapsBreak) {
-      // Insert the break row once, at its chronological position.
-      if (!slots.some(s => s.type === 'break')) {
-        slots.push({
-          type: 'break',
-          label: 'BREAK TIME',
-          start: minutesToTimeString(breakStart),
-          end: minutesToTimeString(breakEnd),
-          isBreak: true,
-        });
-      }
-    } else {
-      slots.push({
-        type: 'period',
-        label: String(periodNumber),
-        start: minutesToTimeString(slotStart),
-        end: minutesToTimeString(slotEnd),
-        isBreak: false,
-      });
-      periodNumber += 1;
-    }
+    slots.push({
+      type: 'period',
+      label: String(periodNumber),
+      start: minutesToTimeString(slotStart),
+      end: minutesToTimeString(slotEnd),
+      isBreak: false,
+    });
+    periodNumber += 1;
 
     cursor = slotEnd;
   }
@@ -570,7 +550,7 @@ export function TeacherTimetableView() {
       if (pdfOptions.includeHeader) {
         htmlContent += `
 <div class="header">
-  <h1>BELMON BILINGUAL HIGH SCHOOL</h1>
+  <h1>MA NDUM FAVOURED EVEN SECONDARY SCHOOL (MANFESS)</h1>
   <p>TEACHER TIMETABLE</p>
   <p class="sub">${timetableData.teacher.name}</p>
   <p class="sub">${classNames || 'All Classes'}</p>
@@ -645,7 +625,7 @@ export function TeacherTimetableView() {
 <div class="footer">
   <span>Generated: ${new Date().toLocaleString()}</span>
   <span style="margin:0 15px;">|</span>
-  <span>BELMON BILINGUAL HIGH SCHOOL</span>
+  <span>MA NDUM FAVOURED EVEN SECONDARY SCHOOL (MANFESS)</span>
   <span style="margin:0 15px;">|</span>
   <span>Page 1 of 1</span>
   <span style="margin:0 15px;">|</span>

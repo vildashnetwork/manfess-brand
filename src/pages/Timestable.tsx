@@ -2609,6 +2609,7 @@ export function TimetableAdminPage() {
         <SubjectsManagerModal
           subjects={subjects}
           classes={classes}
+          teachers={activeTeachers}
           onSaved={refreshSubjects}
           onClose={() => setShowSubjectsModal(false)}
         />
@@ -4104,20 +4105,23 @@ interface SubjectFormState {
   periodsPerWeek: number;
   periodsByClass: Record<string, number>;
   classIds: string[];
+  teacherIds: string[];
 }
 
 const emptySubjectForm = (): SubjectFormState => ({
-  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, periodsByClass: {}, classIds: [],
+  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, periodsByClass: {}, classIds: [], teacherIds: [],
 });
 
 function SubjectsManagerModal({
   subjects,
   classes,
+  teachers,
   onSaved,
   onClose,
 }: {
   subjects: Subject[];
   classes: Class[];
+  teachers: Teacher[];
   onSaved: () => void | Promise<void>;
   onClose: () => void;
 }) {
@@ -4178,6 +4182,7 @@ function SubjectsManagerModal({
       periodsPerWeek: s.periodsPerWeek ?? 4,
       periodsByClass: { ...(s.periodsByClass || {}) },
       classIds: (s.classIds || []).map(String),
+      teacherIds: (s.teacherIds || []).map(String),
     });
   };
 
@@ -4205,6 +4210,7 @@ function SubjectsManagerModal({
         periodsPerWeek: Math.max(1, Math.min(20, Number(form.periodsPerWeek) || 4)),
         periodsByClass,
         classIds: form.classIds,
+        teacherIds: form.teacherIds,
       };
       const res = form._id
         ? await axios.put(`${API_BASE}/subjects/${form._id}`, payload)
@@ -4304,6 +4310,31 @@ function SubjectsManagerModal({
                   <p className="text-[11px] text-black/40">Leave a class untouched to use the default periods per week.</p>
                 </div>
               )}
+              <div className="sm:col-span-2">
+                <Field label="Assigned Teachers">
+                  <div className="flex flex-wrap gap-2">
+                    {teachers.map((teacher) => {
+                      const teacherId = String(teacher._id);
+                      const checked = form.teacherIds.includes(teacherId);
+                      return (
+                        <button
+                          key={teacherId}
+                          type="button"
+                          onClick={() => setForm({
+                            ...form,
+                            teacherIds: checked
+                              ? form.teacherIds.filter((id) => id !== teacherId)
+                              : [...form.teacherIds, teacherId],
+                          })}
+                          className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"}`}
+                        >
+                          {teacher.name || teacher.fullName || "Unnamed teacher"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
               <button onClick={() => setForm(null)} disabled={saving} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
