@@ -874,6 +874,15 @@ export function TimetableAdminPage() {
     loadSchoolSettings();
   }, [loadSchoolSettings]);
 
+  // Restore the conflict report of the last generation so the dashboard
+  // banner (and its "Fix All Conflicts" button) survives page reloads.
+  useEffect(() => {
+    const cached = loadFromLocalStorage("conflicts");
+    if (Array.isArray(cached) && cached.length > 0) {
+      setGenerateConflicts(cached);
+    }
+  }, []);
+
   // Re-fetch subjects after the Subjects & Periods manager saves changes.
   const refreshSubjects = useCallback(async () => {
     try {
@@ -890,6 +899,63 @@ export function TimetableAdminPage() {
   const activeTeachers = useMemo(
     () => teachers.filter((t) => OBJECT_ID_RE.test(t._id || "")),
     [teachers]
+  );
+
+  // Group the conflict report by subject so the red banner can give one
+  // clear diagnosis + numbered action list per subject instead of repeating
+  // one row per class.
+  const conflictGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        key: string;
+        subjectName: string;
+        classNames: string[];
+        missing: number;
+        suggestions: string[];
+        qualifiedTeacherNames: string[];
+        qualifiedTeacherSlots?: number;
+        subjectWeeklyDemand?: number;
+      }
+    >();
+    const missingOf = (c: GenerateConflict) =>
+      c.missingPeriods ??
+      Math.max(0, (c.requestedPeriods ?? 0) - (c.placedPeriods ?? 0));
+    for (const c of generateConflicts) {
+      const key = c.subjectId || c.subjectName || "unknown";
+      const group = map.get(key) ?? {
+        key,
+        subjectName: c.subjectName || "Unknown subject",
+        classNames: [],
+        missing: 0,
+        suggestions: [],
+        qualifiedTeacherNames:
+          c.qualifiedTeacherNames ?? (c.teacherName ? [c.teacherName] : []),
+        qualifiedTeacherSlots: c.qualifiedTeacherSlots,
+        subjectWeeklyDemand: c.subjectWeeklyDemand,
+      };
+      group.missing += missingOf(c);
+      if (c.className && !group.classNames.includes(c.className)) {
+        group.classNames.push(c.className);
+      }
+      if (group.suggestions.length === 0 && c.suggestions?.length) {
+        group.suggestions = c.suggestions;
+      }
+      map.set(key, group);
+    }
+    return [...map.values()].sort((a, b) => b.missing - a.missing);
+  }, [generateConflicts]);
+
+  const totalMissingPeriods = useMemo(
+    () =>
+      generateConflicts.reduce(
+        (sum, c) =>
+          sum +
+          (c.missingPeriods ??
+            Math.max(0, (c.requestedPeriods ?? 0) - (c.placedPeriods ?? 0))),
+        0
+      ),
+    [generateConflicts]
   );
 
   // Save a single teacher's availability (used by the setup wizard).
@@ -939,8 +1005,15 @@ export function TimetableAdminPage() {
   );
 
   // Trigger auto-generation of the timetable from settings + availability.
-  const handleGenerateTimetable = useCallback(async () => {
-    if (!window.confirm(
+  const handleGenerateTimetable = useCallback(async (repair: unknown = false) => {
+    // Only a literal `true` enables repair mode. React invokes onClick
+    // handlers with the click event as the first argument, so a handler
+    // attached directly as `onClick={handleGenerateTimetable}` receives the
+    // SyntheticEvent here. That event previously leaked into the POST body
+    // and axios crashed with "Converting circular structure to JSON" before
+    // the request ever left the browser.
+    const repairMode = typeof repair === "boolean" ? repair : false;
+    if (!repairMode && !window.confirm(
       "This will replace the current timetable for the selected academic year. Continue?"
     )) {
       return;
@@ -989,9 +1062,14 @@ export function TimetableAdminPage() {
         }
       }
 
-      const res = await axios.post(`${API_BASE}/timetable/generate`, {
-        academicYear,
-      });
+      const res = await axios.post(
+        `${API_BASE}/timetable/generate`,
+        { academicYear, repair: repairMode },
+        // Guard against the request hanging forever when the backend is
+        // restarting or its database is unreachable; 90s is far above the
+        // generation time of a healthy server.
+        { timeout: 90_000 }
+      );
 
       if (res.data.success) {
         const { entries: generated, conflicts } = res.data.data;
@@ -1000,15 +1078,14 @@ export function TimetableAdminPage() {
         saveToLocalStorage("entries", mappedEntries);
         setStats(calculateStats(mappedEntries));
         setGenerateConflicts(Array.isArray(conflicts) ? conflicts : []);
+        saveToLocalStorage("conflicts", Array.isArray(conflicts) ? conflicts : []);
 
         if (conflicts && conflicts.length > 0) {
           // Keep the wizard open so the conflict report stays visible in Step 3
           // (previously these were only logged to the console via console.table).
-          toast.warning(
-            `${mappedEntries.length} periods generated, but ${conflicts.length} conflict(s) were found — see the report below.`
-          );
+          toast.warning(`${mappedEntries.length} periods generated, but ${conflicts.length} conflict(s) remain.`);
         } else {
-          toast.success(`${mappedEntries.length} periods scheduled successfully!`);
+          toast.success(`${mappedEntries.length} periods scheduled successfully${repairMode ? " after automatic repair" : ""}!`);
           setShowSetupWizard(false);
         }
         fetchAllData();
@@ -1017,12 +1094,38 @@ export function TimetableAdminPage() {
         setShowSetupWizard(false);
       }
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Failed to generate timetable");
+      console.error("Timetable generation failed:", err);
+      const serverMessage = err?.response?.data?.message;
+      if (serverMessage) {
+        // The backend answered with a JSON error (validation, missing
+        // settings, capacity problems...) — surface its exact message.
+        toast.error(serverMessage);
+      } else if (err?.response) {
+        // Non-JSON response (e.g. a proxy 502/504 page) or an error body
+        // without a message field.
+        toast.error(
+          `Timetable server error (HTTP ${err.response.status}). Please try again.`
+        );
+      } else if (err?.request) {
+        // No HTTP response at all: the backend is unreachable, restarting,
+        // or the connection was dropped mid-flight.
+        toast.error(
+          `Cannot reach the timetable server (${err?.code || "network error"}). Check that the backend is running and try again.`
+        );
+      } else {
+        toast.error(
+          `Failed to generate timetable: ${err?.message || "unknown error"}`
+        );
+      }
       setShowSetupWizard(false);
     } finally {
       setIsGenerating(false);
     }
   }, [academicYear, fetchAllData, activeTeachers]);
+
+  const handleRepairTimetable = useCallback(async () => {
+    await handleGenerateTimetable(true);
+  }, [handleGenerateTimetable]);
 
   // ============================================
   // FILTERED DATA
@@ -2070,6 +2173,82 @@ export function TimetableAdminPage() {
         </div>
       )}
 
+      {/* Conflict report from the last auto-generation, with one-click repair */}
+      {generateConflicts.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="size-5 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-red-800">
+                  {totalMissingPeriods} period{totalMissingPeriods === 1 ? "" : "s"} could not be scheduled
+                </p>
+                <p className="text-xs text-red-700 mt-0.5">
+                  Fix All Conflicts regenerates the week and fills every slot a qualified teacher can cover — never
+                  putting a teacher in a subject they don't teach. The gaps below tell you exactly what to change.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleRepairTimetable}
+                disabled={isGenerating}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-50 transition-all shadow-sm"
+              >
+                <RefreshCw className={`size-4 ${isGenerating ? "animate-spin" : ""}`} />
+                {isGenerating ? "Fixing conflicts..." : "Fix All Conflicts"}
+              </button>
+              <button
+                onClick={() => {
+                  setGenerateConflicts([]);
+                  saveToLocalStorage("conflicts", []);
+                }}
+                disabled={isGenerating}
+                className="px-3 py-2 rounded-lg border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 disabled:opacity-50 transition-all"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+
+          {conflictGroups.map((group) => (
+            <div key={group.key} className="bg-white/80 border border-red-100 rounded-lg p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <p className="text-sm font-bold text-red-800">
+                  {group.subjectName}: {group.missing} period{group.missing === 1 ? "" : "s"} missing
+                </p>
+                <p className="text-[11px] text-red-600">
+                  {group.classNames.length} class{group.classNames.length === 1 ? "" : "es"} —{" "}
+                  {group.classNames.join(", ")}
+                </p>
+              </div>
+              <p className="text-xs text-red-700 mt-1">
+                Taught by:{" "}
+                {group.qualifiedTeacherNames.length > 0
+                  ? group.qualifiedTeacherNames.join(", ")
+                  : "nobody yet"}
+                {typeof group.qualifiedTeacherSlots === "number" &&
+                typeof group.subjectWeeklyDemand === "number"
+                  ? ` · ${group.qualifiedTeacherSlots} qualified slots/week vs ${group.subjectWeeklyDemand} requested`
+                  : ""}
+              </p>
+              {group.suggestions.length > 0 && (
+                <ol className="mt-2 space-y-1">
+                  {group.suggestions.map((s, i) => (
+                    <li
+                      key={i}
+                      className="text-xs font-medium text-red-800 bg-red-50 border border-red-100 rounded-md px-2 py-1.5"
+                    >
+                      <span className="font-bold">{i + 1}.</span> {s}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -2412,6 +2591,7 @@ export function TimetableAdminPage() {
           onSaveTeacherAvailability={saveTeacherAvailability}
           onSaveSchoolSettings={saveSchoolSettings}
           onGenerate={handleGenerateTimetable}
+          onRepair={handleRepairTimetable}
           onCancel={() => setShowSetupWizard(false)}
         />
       )}
@@ -2620,10 +2800,17 @@ const GridView = memo(function GridView({
 interface GenerateConflict {
   className?: string;
   subjectName?: string;
+  subjectId?: string;
   teacherName?: string | null;
   requestedPeriods?: number;
   placedPeriods?: number;
+  missingPeriods?: number;
   reason?: string;
+  suggestions?: string[];
+  qualifiedTeacherNames?: string[];
+  qualifiedTeacherSlots?: number;
+  subjectWeeklyDemand?: number;
+  subjectShortfall?: number;
 }
 
 interface SetupWizardProps {
@@ -2645,6 +2832,7 @@ interface SetupWizardProps {
   onSaveTeacherAvailability: (teacherId: string, isPermanent: boolean, availableDays: string[]) => Promise<boolean>;
   onSaveSchoolSettings: (settings: Omit<SchoolSettings, "_id">) => Promise<boolean>;
   onGenerate: () => Promise<void>;
+  onRepair: () => Promise<void>;
   onCancel: () => void;
 }
 
@@ -2673,6 +2861,7 @@ export function SetupWizard({
   onSaveTeacherAvailability,
   onSaveSchoolSettings,
   onGenerate,
+  onRepair,
   onCancel,
 }: SetupWizardProps) {
   const [activeTab, setActiveTab] = useState<"teachers" | "schedule" | "generate">("teachers");
@@ -2838,6 +3027,7 @@ export function SetupWizard({
               isGenerating={isGenerating}
               conflicts={generateConflicts}
               onGenerate={onGenerate}
+              onRepair={onRepair}
               onBack={() => setActiveTab("schedule")}
             />
           )}
@@ -3087,6 +3277,7 @@ function GenerateTab({
   isGenerating,
   conflicts,
   onGenerate,
+  onRepair,
   onBack,
 }: {
   teachers: SetupWizardProps["teachers"];
@@ -3096,6 +3287,7 @@ function GenerateTab({
   isGenerating: boolean;
   conflicts: GenerateConflict[];
   onGenerate: () => void;
+  onRepair: () => void;
   onBack: () => void;
 }) {
   const [showPlan, setShowPlan] = useState(false);
@@ -3205,9 +3397,23 @@ function GenerateTab({
               </li>
             ))}
           </ul>
+          <div className="mt-3 rounded-lg bg-white/70 border border-red-200 p-3">
+            <p className="text-xs font-bold text-red-800">Suggested fixes</p>
+            <p className="text-xs text-red-700 mt-1">
+              Automatic repair will use other available teachers who teach each subject and fill every free class period.
+              Remaining conflicts mean the timetable has more requested periods than available teaching slots or missing subject assignments.
+            </p>
+            <button
+              onClick={() => onRepair()}
+              disabled={isGenerating}
+              className="mt-3 px-4 py-2 rounded-lg bg-red-700 text-white text-sm font-semibold hover:bg-red-800 disabled:opacity-50 flex items-center gap-2"
+            >
+              <RefreshCw className={`size-4 ${isGenerating ? "animate-spin" : ""}`} />
+              {isGenerating ? "Fixing timetable..." : "Fix Everything Automatically"}
+            </button>
+          </div>
           <p className="text-xs text-red-600 mt-2">
-            Increase periods/day (Step 2), reduce subject periods per week, or free up teacher
-            availability — then regenerate.
+            If repair cannot place everything, increase periods/day, reduce subject periods per week, or add the missing teacher assignments.
           </p>
         </div>
       )}
@@ -3233,7 +3439,7 @@ function GenerateTab({
           Back
         </button>
         <button
-          onClick={onGenerate}
+          onClick={() => onGenerate()}
           disabled={isGenerating}
           className="px-6 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50 flex items-center gap-2"
         >
