@@ -478,7 +478,21 @@ export function TeacherTimetableView() {
     } catch (error: any) {
       console.error('Error fetching timetable:', error);
       setError(error.message || 'Failed to load timetable');
-      toast.error('Failed to load timetable. Using demo data...');
+
+      // If teacher not found (404), the localStorage user ID is stale
+      if (error.response?.status === 404) {
+        toast.error('Teacher not found. Please log in again.', {
+          action: {
+            label: 'Log out',
+            onClick: () => {
+              localStorage.clear();
+              window.location.href = '/login';
+            }
+          }
+        });
+      } else {
+        toast.error('Failed to load timetable. Using demo data...');
+      }
 
       const mockData = generateMockData(user, activeSettings);
       setTimetableData(mockData);

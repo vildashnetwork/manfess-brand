@@ -201,14 +201,18 @@ function isValidTimeString(t: any): t is string {
 }
 
 function addOneHourCapped(time: string): string {
+  // If not in HH:mm format, just return a default end time
+  if (!/^([01]?\d|2[0-3]):([0-5]\d)$/.test(time)) {
+    return "09:00";
+  }
   const [h, m] = time.split(":").map(Number);
   const endHour = Math.min(h + 1, 23);
   return `${String(endHour).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 function sanitizeTimes(startTimeRaw: any, endTimeRaw: any): { startTime: string; endTime: string } {
-  const startTime = isValidTimeString(startTimeRaw) ? startTimeRaw : "08:00";
-  const endCandidate = isValidTimeString(endTimeRaw) ? endTimeRaw : null;
+  const startTime = typeof startTimeRaw === "string" && startTimeRaw.trim() ? startTimeRaw.trim() : "";
+  const endCandidate = typeof endTimeRaw === "string" && endTimeRaw.trim() ? endTimeRaw.trim() : null;
   const isPlaceholder = endCandidate === null || endCandidate === "00:00";
 
   const endTime = isPlaceholder ? addOneHourCapped(startTime) : endCandidate!;
@@ -773,9 +777,11 @@ export function TimetableAdminPage() {
       const cachedClasses = loadFromLocalStorage("classes");
       const cachedSubjects = loadFromLocalStorage("subjects");
       const hasCache = cachedEntries && cachedEntries.length > 0;
+      const sanitizedCached: TimetableEntry[] = hasCache
+        ? (cachedEntries as TimetableEntry[]).map(sanitizeEntry)
+        : [];
 
       if (hasCache) {
-        const sanitizedCached: TimetableEntry[] = (cachedEntries as TimetableEntry[]).map(sanitizeEntry);
         setEntries(sanitizedCached);
         setTeachers(cachedTeachers || []);
         setClasses(cachedClasses || []);
@@ -804,18 +810,49 @@ export function TimetableAdminPage() {
             setEntries(mappedEntries);
             saveToLocalStorage("entries", mappedEntries);
             setStats(calculateStats(mappedEntries));
+          } else if (cachedEntries && cachedEntries.length > 0) {
+            // Keep cached entries if API returned none
+            setEntries(sanitizedCached);
           }
           if (teachersRes.data.success && teachersRes.data.data.length > 0) {
             setTeachers(teachersRes.data.data);
             saveToLocalStorage("teachers", teachersRes.data.data);
+          } else if (cachedTeachers && cachedTeachers.length > 0) {
+            // Keep cached teachers if API returned none
+            setTeachers(cachedTeachers);
           }
           if (classesRes.data.success && classesRes.data.data.length > 0) {
             setClasses(classesRes.data.data);
             saveToLocalStorage("classes", classesRes.data.data);
+          } else if (cachedClasses && cachedClasses.length > 0) {
+            // Keep cached classes if API returned none
+            setClasses(cachedClasses);
           }
           if (subjectsRes.data.success && subjectsRes.data.data.length > 0) {
             setSubjects(subjectsRes.data.data);
             saveToLocalStorage("subjects", subjectsRes.data.data);
+          } else if (cachedSubjects && cachedSubjects.length > 0) {
+            // Keep cached subjects if API returned none
+            setSubjects(cachedSubjects);
+          }
+
+          // Final fallback: if any resource is still empty, use mock data
+          // This ensures dropdowns are always populated
+          const needsMockTeachers = !teachersRes.data.success || !teachersRes.data.data?.length;
+          const needsMockClasses = !classesRes.data.success || !classesRes.data.data?.length;
+          const needsMockSubjects = !subjectsRes.data.success || !subjectsRes.data.data?.length;
+          const hasNoTeachers = !cachedTeachers || cachedTeachers.length === 0;
+          const hasNoClasses = !cachedClasses || cachedClasses.length === 0;
+          const hasNoSubjects = !cachedSubjects || cachedSubjects.length === 0;
+
+          if ((needsMockTeachers && hasNoTeachers) ||
+            (needsMockClasses && hasNoClasses) ||
+            (needsMockSubjects && hasNoSubjects)) {
+            const mockData = generateMockData();
+            if (needsMockTeachers && hasNoTeachers) setTeachers(mockData.teachers);
+            if (needsMockClasses && hasNoClasses) setClasses(mockData.classes);
+            if (needsMockSubjects && hasNoSubjects) setSubjects(mockData.subjects);
+            toast.info("Using demo data for empty resources");
           }
         } else if (!hasCache) {
           applyMockDataFallback();
@@ -1211,7 +1248,17 @@ export function TimetableAdminPage() {
       if (isSaving) return;
 
       if (!entry.teacherId || !entry.classId || !entry.subjectId) {
-        toast.error("Please fill in all required fields");
+        // Check if dropdowns are empty (data not loaded)
+        const missingItems = [];
+        if (!entry.teacherId) missingItems.push("teacher");
+        if (!entry.classId) missingItems.push("class");
+        if (!entry.subjectId) missingItems.push("subject");
+
+        if (teachers.length === 0 || classes.length === 0 || subjects.length === 0) {
+          toast.error(`Cannot add period: Please select a ${missingItems.join(", ")}. If dropdowns are empty, please refresh the page or check your connection.`);
+        } else {
+          toast.error(`Please select a ${missingItems.join(", ")}`);
+        }
         return;
       }
 
@@ -2228,7 +2275,7 @@ export function TimetableAdminPage() {
                   ? group.qualifiedTeacherNames.join(", ")
                   : "nobody yet"}
                 {typeof group.qualifiedTeacherSlots === "number" &&
-                typeof group.subjectWeeklyDemand === "number"
+                  typeof group.subjectWeeklyDemand === "number"
                   ? ` · ${group.qualifiedTeacherSlots} qualified slots/week vs ${group.subjectWeeklyDemand} requested`
                   : ""}
               </p>
@@ -2548,8 +2595,8 @@ export function TimetableAdminPage() {
               subjectName: "",
               subjectCode: "",
               day: "Monday",
-              startTime: "08:00",
-              endTime: "09:00",
+              startTime: "",
+              endTime: "",
               periodNumber: 1,
               cycle: "first",
               ratePerPeriod: CYCLE_RATES.first,
@@ -3597,11 +3644,6 @@ function TimetableEntryModal({
   const handleSubmit = () => {
     const { startTime, endTime } = sanitizeTimes(form.startTime, form.endTime);
 
-    if (startTime >= endTime) {
-      toast.error("Start time must be before end time");
-      return;
-    }
-
     const finalEntry: TimetableEntry = { ...form, startTime, endTime };
 
     setSaving(true);
@@ -3638,11 +3680,18 @@ function TimetableEntryModal({
               <tr className="align-top">
                 <td className="p-2"><select value={form.day} onChange={(e) => set("day", e.target.value)} className={inputCls}>{DAYS.map((d) => <option key={d} value={d}>{d}</option>)}</select></td>
                 <td className="p-2"><input type="number" value={form.periodNumber} onChange={(e) => set("periodNumber", parseInt(e.target.value) || 1)} className={inputCls} min="1" /></td>
-                <td className="p-2"><input type="time" value={form.startTime} onChange={(e) => set("startTime", e.target.value)} className={inputCls} /></td>
-                <td className="p-2"><input type="time" value={form.endTime} onChange={(e) => set("endTime", e.target.value)} className={inputCls} /></td>
-                <td className="p-2"><select value={form.teacherId} onChange={(e) => { const teacher = teachers.find((t) => t._id === e.target.value); set("teacherId", e.target.value); set("teacherName", teacher?.name || ""); }} className={inputCls}><option value="">Select Teacher</option>{teachers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select></td>
-                <td className="p-2"><select value={form.classId} onChange={(e) => { const cls = classes.find((c) => c._id === e.target.value); set("classId", e.target.value); set("className", getClassDisplayName(cls, "")); }} className={inputCls}><option value="">Select Class</option>{classes.map((c) => <option key={c._id} value={c._id}>{getClassDisplayName(c)}</option>)}</select></td>
-                <td className="p-2"><select value={form.subjectId} onChange={(e) => { const subj = subjects.find((s) => s._id === e.target.value); set("subjectId", e.target.value); set("subjectName", subj?.name || ""); set("subjectCode", subj?.code || ""); }} className={inputCls}><option value="">Select Subject</option>{subjects.map((s) => <option key={s._id} value={s._id}>{s.name} ({s.code})</option>)}</select></td>
+
+                <td className="p-2"><input type="text" value={form.startTime}
+                  onChange={(e) => set("startTime", e.target.value)}
+                  className={inputCls} placeholder="Start time" /></td>
+                <td className="p-2"><input type="text" value={form.endTime}
+                  onChange={(e) => set("endTime", e.target.value)}
+                  className={inputCls} placeholder="End time" /></td>
+
+
+                <td className="p-2"><input type="text" value={form.teacherName || ""} onChange={(e) => setForm((f) => ({ ...f, teacherName: e.target.value }))} className={inputCls} placeholder="Teacher name" /></td>
+                <td className="p-2"><input type="text" value={form.className || ""} onChange={(e) => setForm((f) => ({ ...f, className: e.target.value }))} className={inputCls} placeholder="Class name" /></td>
+                <td className="p-2"><input type="text" value={form.subjectName || ""} onChange={(e) => setForm((f) => ({ ...f, subjectName: e.target.value }))} className={inputCls} placeholder="Subject name" /></td>
                 <td className="p-2"><select value={form.cycle} onChange={(e) => { const cycle = e.target.value as "first" | "second"; set("cycle", cycle); set("ratePerPeriod", CYCLE_RATES[cycle]); }} className={inputCls}><option value="first">1st</option><option value="second">2nd</option></select></td>
                 <td className="p-2"><input type="text" value={form.room || ""} onChange={(e) => set("room", e.target.value)} className={inputCls} placeholder="Room" /></td>
                 <td className="p-2"><input type="text" value={form.academicYear} onChange={(e) => set("academicYear", e.target.value)} className={inputCls} /></td>
@@ -4042,9 +4091,11 @@ function SchoolSettingsModal({
           <Field label="School Start Time*">
             <input type="time" value={form.schoolStartTime} onChange={(e) => set("schoolStartTime", e.target.value)} className={inputCls} />
           </Field>
+
           <Field label="School End Time*">
             <input type="time" value={form.schoolEndTime} onChange={(e) => set("schoolEndTime", e.target.value)} className={inputCls} />
           </Field>
+
           <Field label="Period Duration (minutes)*">
             <input type="number" min={10} max={120} value={form.periodDurationMinutes}
               onChange={(e) => set("periodDurationMinutes", Math.max(10, Math.min(120, Number(e.target.value) || 45)))}
