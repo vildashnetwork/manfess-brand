@@ -214,9 +214,11 @@ function buildMatrixTimetable(entries: TimetableEntry[], settings: SchoolSetting
   const timeSlots = buildDaySlots(settings);
   const days = orderSchoolDays(settings.schoolDays);
   const matrix: Record<string, Record<string, MatrixCell>> = {};
+  const dynamicSlots: Record<string, DaySlot[]> = {};
 
   days.forEach(day => {
     matrix[day] = {};
+    dynamicSlots[day] = [];
     timeSlots.forEach(slot => {
       const key = `${slot.start}|${slot.end}`;
       matrix[day][key] = {
@@ -246,15 +248,44 @@ function buildMatrixTimetable(entries: TimetableEntry[], settings: SchoolSetting
       );
     }
 
-    // 3. Same period number.
-    if (!matchedSlot) {
-      matchedSlot = periodSlots.find(slot => Number(slot.label) === entry.periodNumber);
-    }
-
-    // 4. Same starting hour (handles duration mismatches).
+    // 3. Same starting hour (handles duration mismatches).
     if (!matchedSlot) {
       const entryHour = (entry.startTime || '').split(':')[0];
       matchedSlot = periodSlots.find(slot => slot.start.split(':')[0] === entryHour);
+    }
+
+    // 4. Check if there's already a dynamic slot for this entry's time
+    if (!matchedSlot) {
+      const existingDynamicSlot = dynamicSlots[entry.day]?.find(slot => slot.start === entry.startTime);
+      if (existingDynamicSlot) {
+        matchedSlot = existingDynamicSlot;
+      }
+    }
+
+    // 5. If still no match, create a new dynamic slot for this entry's time
+    if (!matchedSlot) {
+      const newSlot: DaySlot = {
+        type: 'period',
+        label: String(periodSlots.length + dynamicSlots[entry.day].length + 1),
+        start: entry.startTime,
+        end: entry.endTime,
+        isBreak: false,
+      };
+      dynamicSlots[entry.day].push(newSlot);
+      matchedSlot = newSlot;
+
+      // Add the new slot to the matrix
+      const key = `${entry.startTime}|${entry.endTime}`;
+      matrix[entry.day][key] = {
+        label: matchedSlot.label,
+        isBreak: false,
+        startTime: entry.startTime,
+        endTime: entry.endTime,
+        entries: []
+      };
+
+      // Add the new slot to timeSlots for proper row ordering
+      timeSlots.push(matchedSlot);
     }
 
     if (matchedSlot) {
@@ -263,6 +294,15 @@ function buildMatrixTimetable(entries: TimetableEntry[], settings: SchoolSetting
         matrix[entry.day][key].entries.push(entry);
       }
     }
+  });
+
+  // Sort time slots by start time for proper row ordering
+  timeSlots.sort((a, b) => {
+    if (a.isBreak && !b.isBreak) return 1;
+    if (!a.isBreak && b.isBreak) return -1;
+    const aMin = timeStringToMinutes(a.start);
+    const bMin = timeStringToMinutes(b.start);
+    return aMin - bMin;
   });
 
   return { matrix, days, timeSlots };
@@ -1279,14 +1319,14 @@ function MatrixView({ entries, teacherName, settings }: { entries: TimetableEntr
 
       <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[600px] sm:min-w-full">
+          <table className="w-full min-w-[600px] sm:min-w-full" style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr className="bg-black text-white">
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold uppercase tracking-wider border border-black" style={{ minWidth: '100px' }}>
+                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold uppercase tracking-wider border border-black" style={{ minWidth: '100px', width: '100px' }}>
                   TIME
                 </th>
                 {days.map((day) => (
-                  <th key={day} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold uppercase tracking-wider border border-black">
+                  <th key={day} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold uppercase tracking-wider border border-black" style={{ width: `${Math.floor(100 / (days.length + 1))}%` }}>
                     {day}
                   </th>
                 ))}
@@ -1309,7 +1349,7 @@ function MatrixView({ entries, teacherName, settings }: { entries: TimetableEntr
 
                       if (!cell || cell.entries.length === 0) {
                         return (
-                          <td key={`${day}-${key}`} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center border border-black">
+                          <td key={`${day}-${key}`} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center border border-black" style={{ verticalAlign: 'top' }}>
                             <span className="text-black/40">-</span>
                           </td>
                         );
@@ -1317,14 +1357,14 @@ function MatrixView({ entries, teacherName, settings }: { entries: TimetableEntr
 
                       if (isBreak) {
                         return (
-                          <td key={`${day}-${key}`} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center border border-black bg-amber-100">
+                          <td key={`${day}-${key}`} className="px-2 sm:px-3 py-2 sm:py-2.5 text-center border border-black bg-amber-100" style={{ verticalAlign: 'top' }}>
                             <span className="text-xs font-bold text-amber-700">BREAK</span>
                           </td>
                         );
                       }
 
                       return (
-                        <td key={`${day}-${key}`} className="px-1 sm:px-2 py-1 sm:py-1.5 text-center border border-black">
+                        <td key={`${day}-${key}`} className="px-1 sm:px-2 py-1 sm:py-1.5 text-center border border-black" style={{ verticalAlign: 'top' }}>
                           {cell.entries.map((entry: TimetableEntry) => (
                             <div key={entry.id} className="mb-1 last:mb-0 p-1 rounded bg-white/80 border border-stone-200">
                               <div className="font-semibold text-xs sm:text-sm">{entry.subjectName}</div>

@@ -483,6 +483,7 @@ function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], sch
   }));
 
   const days = schoolDays;
+  const dynamicSlots: any[] = [];
 
   const matrix: any = {};
   days.forEach(day => {
@@ -504,46 +505,67 @@ function buildMatrixTimetable(entries: TimetableEntry[], classList: Class[], sch
       entryStart = `0${entryStart}`;
     }
 
+    // 1. Match by time range
     let matchedSlot = timeSlots.find(slot => {
       return entryStart >= slot.start && entryStart < slot.end;
     });
 
+    // 2. Exact start time match
     if (!matchedSlot) {
       matchedSlot = timeSlots.find(slot => slot.start === entryStart);
     }
 
-    if (!matchedSlot) {
-      matchedSlot = timeSlots.find(slot => {
-        return parseInt(slot.label) === entry.periodNumber;
-      });
-    }
-
+    // 3. Entry fully contained within slot
     if (!matchedSlot) {
       matchedSlot = timeSlots.find(slot => {
         return entryStart >= slot.start && entry.endTime <= slot.end;
       });
     }
 
-    if (matchedSlot) {
-      if (matrix[entry.day] && matrix[entry.day][matchedSlot.start]) {
-        matrix[entry.day][matchedSlot.start].entries.push(entry);
-      }
-    } else {
-      const entryHour = parseInt(entryStart.split(':')[0]);
-      const closestSlot = timeSlots.find(slot => {
-        const slotHour = parseInt(slot.start.split(':')[0]);
-        return slotHour === entryHour;
+    // 4. Check dynamic slots
+    if (!matchedSlot) {
+      matchedSlot = dynamicSlots.find(slot => slot.start === entryStart);
+    }
+
+    // 5. Create dynamic slot if no match found
+    if (!matchedSlot) {
+      const newSlot = {
+        start: entryStart,
+        end: entry.endTime,
+        label: String(timeSlots.length + dynamicSlots.length + 1),
+        isBreak: false,
+      };
+      dynamicSlots.push(newSlot);
+      matchedSlot = newSlot;
+
+      // Add to matrix for all days
+      days.forEach(day => {
+        matrix[day][entryStart] = {
+          label: newSlot.label,
+          isBreak: false,
+          startTime: entryStart,
+          endTime: entry.endTime,
+          entries: []
+        };
       });
 
-      if (closestSlot && matrix[entry.day] && matrix[entry.day][closestSlot.start]) {
-        matrix[entry.day][closestSlot.start].entries.push(entry);
-      } else {
-        const firstSlot = timeSlots[0];
-        if (matrix[entry.day] && matrix[entry.day][firstSlot.start]) {
-          matrix[entry.day][firstSlot.start].entries.push(entry);
-        }
+      // Add to timeSlots for proper ordering
+      timeSlots.push(newSlot);
+    }
+
+    if (matchedSlot) {
+      const slotStart = typeof matchedSlot === 'object' ? matchedSlot.start : matchedSlot;
+      if (matrix[entry.day] && matrix[entry.day][slotStart]) {
+        matrix[entry.day][slotStart].entries.push(entry);
       }
     }
+  });
+
+  // Sort time slots by start time for proper row ordering
+  timeSlots.sort((a, b) => {
+    const aMin = timeStringToMinutes(a.start);
+    const bMin = timeStringToMinutes(b.start);
+    return aMin - bMin;
   });
 
   const displayTimeSlots = timeSlots.map(slot => ({
@@ -1205,6 +1227,31 @@ export function TimetableAdminPage() {
   }, []);
 
   const uniqueClasses = useMemo(() => classes, [classes]);
+
+  // Memoize the initial entry for the TimetableEntryModal to prevent form reset on every render
+  const modalInitialEntry = useMemo(
+    () =>
+      editingEntry || {
+        id: `entry_${Date.now()}`,
+        teacherId: "",
+        teacherName: "",
+        classId: "",
+        className: "",
+        subjectId: "",
+        subjectName: "",
+        subjectCode: "",
+        day: "Monday",
+        startTime: "",
+        endTime: "",
+        periodNumber: 1,
+        cycle: "first",
+        ratePerPeriod: CYCLE_RATES.first,
+        room: "",
+        academicYear: academicYear,
+        isActive: true,
+      },
+    [editingEntry, academicYear]
+  );
 
   // ============================================
   // CRUD OPERATIONS
@@ -2584,27 +2631,7 @@ export function TimetableAdminPage() {
 
       {(showAddModal || editingEntry) && (
         <TimetableEntryModal
-          initial={
-            editingEntry || {
-              id: `entry_${Date.now()}`,
-              teacherId: "",
-              teacherName: "",
-              classId: "",
-              className: "",
-              subjectId: "",
-              subjectName: "",
-              subjectCode: "",
-              day: "Monday",
-              startTime: "",
-              endTime: "",
-              periodNumber: 1,
-              cycle: "first",
-              ratePerPeriod: CYCLE_RATES.first,
-              room: "",
-              academicYear: academicYear,
-              isActive: true,
-            }
-          }
+          initial={modalInitialEntry}
           teachers={teachers}
           classes={classes}
           subjects={subjects}
@@ -3681,17 +3708,35 @@ function TimetableEntryModal({
                 <td className="p-2"><select value={form.day} onChange={(e) => set("day", e.target.value)} className={inputCls}>{DAYS.map((d) => <option key={d} value={d}>{d}</option>)}</select></td>
                 <td className="p-2"><input type="number" value={form.periodNumber} onChange={(e) => set("periodNumber", parseInt(e.target.value) || 1)} className={inputCls} min="1" /></td>
 
-                <td className="p-2"><input type="text" value={form.startTime}
+                <td className="p-2"><input type="time" value={form.startTime}
                   onChange={(e) => set("startTime", e.target.value)}
                   className={inputCls} placeholder="Start time" /></td>
-                <td className="p-2"><input type="text" value={form.endTime}
+                <td className="p-2"><input type="time" value={form.endTime}
                   onChange={(e) => set("endTime", e.target.value)}
                   className={inputCls} placeholder="End time" /></td>
 
 
-                <td className="p-2"><input type="text" value={form.teacherName || ""} onChange={(e) => setForm((f) => ({ ...f, teacherName: e.target.value }))} className={inputCls} placeholder="Teacher name" /></td>
-                <td className="p-2"><input type="text" value={form.className || ""} onChange={(e) => setForm((f) => ({ ...f, className: e.target.value }))} className={inputCls} placeholder="Class name" /></td>
-                <td className="p-2"><input type="text" value={form.subjectName || ""} onChange={(e) => setForm((f) => ({ ...f, subjectName: e.target.value }))} className={inputCls} placeholder="Subject name" /></td>
+                <td className="p-2"><select value={form.teacherId} onChange={(e) => {
+                  const teacher = teachers.find(t => t._id === e.target.value);
+                  setForm((f) => ({ ...f, teacherId: e.target.value, teacherName: teacher?.name || "" }));
+                }} className={inputCls}>
+                  <option value="">Select Teacher</option>
+                  {teachers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
+                </select></td>
+                <td className="p-2"><select value={form.classId} onChange={(e) => {
+                  const cls = classes.find(c => c._id === e.target.value);
+                  setForm((f) => ({ ...f, classId: e.target.value, className: cls?.department ? `${cls.className} ${cls.department}` : cls?.className || "" }));
+                }} className={inputCls}>
+                  <option value="">Select Class</option>
+                  {classes.map((c) => <option key={c._id} value={c._id}>{c.department ? `${c.className} ${c.department}` : c.className}</option>)}
+                </select></td>
+                <td className="p-2"><select value={form.subjectId} onChange={(e) => {
+                  const subject = subjects.find(s => s._id === e.target.value);
+                  setForm((f) => ({ ...f, subjectId: e.target.value, subjectName: subject?.name || "", subjectCode: subject?.code || "" }));
+                }} className={inputCls}>
+                  <option value="">Select Subject</option>
+                  {subjects.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+                </select></td>
                 <td className="p-2"><select value={form.cycle} onChange={(e) => { const cycle = e.target.value as "first" | "second"; set("cycle", cycle); set("ratePerPeriod", CYCLE_RATES[cycle]); }} className={inputCls}><option value="first">1st</option><option value="second">2nd</option></select></td>
                 <td className="p-2"><input type="text" value={form.room || ""} onChange={(e) => set("room", e.target.value)} className={inputCls} placeholder="Room" /></td>
                 <td className="p-2"><input type="text" value={form.academicYear} onChange={(e) => set("academicYear", e.target.value)} className={inputCls} /></td>
