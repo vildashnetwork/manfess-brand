@@ -769,7 +769,10 @@ export function TimetableAdminPage() {
   const schedule = useMemo(() => buildScheduleFromSettings(schoolSettings), [schoolSettings]);
   const scheduleDays = useMemo(() => {
     const configured = schoolSettings.schoolDays?.length ? schoolSettings.schoolDays : DEFAULT_SCHOOL_SETTINGS.schoolDays;
-    return DAYS.filter((day) => configured.includes(day));
+    // Always ensure Monday stays on the timetable even if a previously saved
+    // settings record happened to drop it.
+    const withMonday = configured.includes("Monday") ? configured : ["Monday", ...configured];
+    return DAYS.filter((day) => withMonday.includes(day));
   }, [schoolSettings]);
 
   // ============================================
@@ -1291,52 +1294,98 @@ export function TimetableAdminPage() {
   }, []);
 
   const handleSaveEntry = useCallback(
-    async (entry: TimetableEntry) => {
+    async (entryOrEntries: TimetableEntry | TimetableEntry[]) => {
       if (isSaving) return;
 
-      if (!entry.teacherId || !entry.classId || !entry.subjectId) {
-        // Check if dropdowns are empty (data not loaded)
-        const missingItems = [];
-        if (!entry.teacherId) missingItems.push("teacher");
-        if (!entry.classId) missingItems.push("class");
-        if (!entry.subjectId) missingItems.push("subject");
+      const entriesToSave: TimetableEntry[] = Array.isArray(entryOrEntries)
+        ? entryOrEntries
+        : [entryOrEntries];
 
-        if (teachers.length === 0 || classes.length === 0 || subjects.length === 0) {
-          toast.error(`Cannot add period: Please select a ${missingItems.join(", ")}. If dropdowns are empty, please refresh the page or check your connection.`);
-        } else {
-          toast.error(`Please select a ${missingItems.join(", ")}`);
+      if (entriesToSave.length === 0) return;
+
+      // A multi-class add (one subject to several classes at the same time)
+      // submits one entry per class. Validate every entry up-front.
+      for (const entry of entriesToSave) {
+        if (!entry.teacherId || !entry.classId || !entry.subjectId) {
+          // Check if dropdowns are empty (data not loaded)
+          const missingItems = [];
+          if (!entry.teacherId) missingItems.push("teacher");
+          if (!entry.classId) missingItems.push("class");
+          if (!entry.subjectId) missingItems.push("subject");
+
+          if (teachers.length === 0 || classes.length === 0 || subjects.length === 0) {
+            toast.error(`Cannot add period: Please select a ${missingItems.join(", ")}. If dropdowns are empty, please refresh the page or check your connection.`);
+          } else {
+            toast.error(`Please select a ${missingItems.join(", ")}`);
+          }
+          return;
         }
-        return;
       }
 
-      const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
-      const sanitizedEntry: TimetableEntry = { ...entry, startTime, endTime };
+      const sanitizedAll: TimetableEntry[] = entriesToSave.map((entry) => {
+        const { startTime, endTime } = sanitizeTimes(entry.startTime, entry.endTime);
+        return { ...entry, startTime, endTime };
+      });
 
-      if (sanitizedEntry.startTime >= sanitizedEntry.endTime) {
-        toast.error("Start time must be before end time");
-        return;
+      for (const sanitizedEntry of sanitizedAll) {
+        if (sanitizedEntry.startTime >= sanitizedEntry.endTime) {
+          toast.error("Start time must be before end time");
+          return;
+        }
+      }
+
+      // A class can only hold ONE period in a given time slot. If the selected
+      // class already has a period at this day + startTime, block the add.
+      // (Different classes at the same time stay allowed — that's the
+      // multi-class / combined-class scheduling feature.)
+      for (const sanitizedEntry of sanitizedAll) {
+        const classConflict = entries.find((e) =>
+          e.day === sanitizedEntry.day &&
+          e.startTime === sanitizedEntry.startTime &&
+          e.academicYear === sanitizedEntry.academicYear &&
+          e.id !== sanitizedEntry.id &&
+          e._id !== sanitizedEntry._id &&
+          (
+            (e.classId && sanitizedEntry.classId && e.classId === sanitizedEntry.classId) ||
+            (e.className && sanitizedEntry.className && e.className === sanitizedEntry.className)
+          )
+        );
+
+        if (classConflict) {
+          const conflictClass = classes.find((c) => c._id === classConflict.classId);
+          const conflictClassName = getClassDisplayName(conflictClass, classConflict.className);
+          toast.error(
+            `⚠️ ${conflictClassName} already has "${classConflict.subjectName}" (${classConflict.teacherName}) at ${classConflict.startTime} on ${classConflict.day}.\n\n` +
+            `A class can only be assigned one period in this time slot.\n` +
+            `Choose a different time, or remove the existing period first.`
+          );
+          return;
+        }
       }
 
       setIsSaving(true);
       try {
-        const isNew = !sanitizedEntry._id &&
-          (!sanitizedEntry.id || sanitizedEntry.id.startsWith('entry_'));
+        let workingEntries = [...entries];
+        let editedAny = false;
 
-        const isExisting = !isNew && entries.some((e) => {
-          const matchById =
-            e.id === sanitizedEntry.id ||
-            e._id === sanitizedEntry.id ||
-            e.id === sanitizedEntry._id ||
-            e._id === sanitizedEntry._id ||
-            (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
-          return matchById;
-        });
+        for (const sanitizedEntry of sanitizedAll) {
+          const isNew = !sanitizedEntry._id &&
+            (!sanitizedEntry.id || sanitizedEntry.id.startsWith('entry_'));
 
-        const apiData = mapForApi(sanitizedEntry);
-        let updatedEntries: TimetableEntry[];
+          const isExisting = !isNew && workingEntries.some((e) => {
+            const matchById =
+              e.id === sanitizedEntry.id ||
+              e._id === sanitizedEntry.id ||
+              e.id === sanitizedEntry._id ||
+              e._id === sanitizedEntry._id ||
+              (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
+            return matchById;
+          });
 
-        if (isExisting) {
-          const existingEntry = entries.find((e) => {
+          const apiData = mapForApi(sanitizedEntry);
+
+          if (isExisting) {
+            const existingEntry = workingEntries.find((e) => {
             const matchById =
               e.id === sanitizedEntry.id ||
               e._id === sanitizedEntry.id ||
@@ -1357,7 +1406,7 @@ export function TimetableAdminPage() {
           const result = await syncToAPI("PUT", `${API_BASE}/timetable/${apiId}`, apiData);
 
           if (result?.success) {
-            updatedEntries = entries.map((e) => {
+            workingEntries = workingEntries.map((e) => {
               const isMatching =
                 e.id === sanitizedEntry.id ||
                 e._id === sanitizedEntry.id ||
@@ -1374,29 +1423,35 @@ export function TimetableAdminPage() {
               }
               return e;
             });
-
-            setEntries(updatedEntries);
-            setStats(calculateStats(updatedEntries));
-            saveToLocalStorage("entries", updatedEntries);
-            toast.success("Timetable entry updated");
+            editedAny = true;
           } else {
             throw new Error(result?.message || "Failed to update");
           }
         } else {
           try {
-            const teacherConflict = entries.find((e) =>
+            // Only block a genuine duplicate: the SAME teacher assigned to the
+            // SAME class at the SAME time. A teacher may teach multiple
+            // classes in one slot (combined classes), and a class may hold
+            // multiple subjects in one slot as long as the teachers differ.
+            const teacherConflict = workingEntries.find((e) =>
               e.teacherId === sanitizedEntry.teacherId &&
               e.day === sanitizedEntry.day &&
               e.startTime === sanitizedEntry.startTime &&
               e.academicYear === sanitizedEntry.academicYear &&
               e.id !== sanitizedEntry.id &&
-              e._id !== sanitizedEntry._id
+              e._id !== sanitizedEntry._id &&
+              // Same class check (by id when available, otherwise by name)
+              (
+                (e.classId && sanitizedEntry.classId && e.classId === sanitizedEntry.classId) ||
+                (e.className && sanitizedEntry.className && e.className === sanitizedEntry.className)
+              )
             );
 
             if (teacherConflict) {
               const conflictTeacher = teachers.find(t => t._id === teacherConflict.teacherId);
               toast.error(
                 `⚠️ Teacher "${conflictTeacher?.name || teacherConflict.teacherName}" is already assigned to ${teacherConflict.className} at this time on ${sanitizedEntry.day}.\n\n` +
+                `This class already has this teacher in this period.\n` +
                 `To add multiple subjects to the same class at the same time, use a different teacher.`
               );
               setIsSaving(false);
@@ -1414,11 +1469,7 @@ export function TimetableAdminPage() {
                 ratePerPeriod: savedData.ratePerPeriod || sanitizedEntry.ratePerPeriod,
               };
 
-              updatedEntries = [...entries, savedEntry];
-              setEntries(updatedEntries);
-              setStats(calculateStats(updatedEntries));
-              saveToLocalStorage("entries", updatedEntries);
-              toast.success("Timetable entry added successfully");
+              workingEntries = [...workingEntries, savedEntry];
             } else {
               throw new Error(result?.message || "Failed to create entry");
             }
@@ -1438,12 +1489,24 @@ export function TimetableAdminPage() {
             return;
           }
         }
+      }
+
+        setEntries(workingEntries);
+        setStats(calculateStats(workingEntries));
+        saveToLocalStorage("entries", workingEntries);
+
+        if (editedAny) {
+          toast.success("Timetable entry updated");
+        } else if (sanitizedAll.length > 1) {
+          toast.success(`${sanitizedAll.length} periods added successfully`);
+        } else {
+          toast.success("Timetable entry added successfully");
+        }
 
         setEditingEntry(null);
         setShowAddModal(false);
       } catch (error: any) {
         console.error("Error saving timetable:", error);
-        toast.error(error instanceof Error ? error.message : "Failed to save entry");
         if (error.message?.includes('already assigned to')) {
           toast.error(`⚠️ ${error.message}`);
         } else {
@@ -2622,8 +2685,13 @@ export function TimetableAdminPage() {
       )}
       {viewMode === "calendar" && (
         <CalendarView
-          entries={combineMultiSubjectEntries(filteredEntries)}
+          entries={filteredEntries}
           onEdit={handleEditRequest}
+          onSave={handleSaveEntry}
+          teachers={teachers}
+          classes={classes}
+          subjects={subjects}
+          isSaving={isSaving}
           schedule={schedule}
           days={scheduleDays}
         />
@@ -3539,24 +3607,46 @@ function GenerateTab({
 const CalendarView = memo(function CalendarView({
   entries,
   onEdit,
+  onSave,
+  teachers,
+  classes,
+  subjects,
+  isSaving,
   schedule,
   days,
 }: {
   entries: TimetableEntry[];
   onEdit: (entry: TimetableEntry) => void;
+  onSave: (entry: TimetableEntry) => Promise<void>;
+  teachers: Teacher[];
+  classes: Class[];
+  subjects: Subject[];
+  isSaving: boolean;
   schedule: ScheduleSlot[];
   days: string[];
 }) {
-  const entriesByDayTime = useMemo(() => {
-    const map = new Map<string, TimetableEntry[]>();
-    entries.forEach((e) => {
-      const key = `${e.day}|${e.startTime}`;
-      const bucket = map.get(key);
-      if (bucket) bucket.push(e);
-      else map.set(key, [e]);
-    });
-    return map;
-  }, [entries]);
+  const [directEdit, setDirectEdit] = useState(false);
+  const [draft, setDraft] = useState<TimetableEntry | null>(null);
+
+  const classLabel = (classItem: Class) => getClassDisplayName(classItem, classItem.className);
+
+  const startDirectEdit = (entry: TimetableEntry) => {
+    if (!directEdit) {
+      onEdit(entry);
+      return;
+    }
+    setDraft({ ...entry });
+  };
+
+  const updateDraft = <K extends keyof TimetableEntry>(key: K, value: TimetableEntry[K]) => {
+    setDraft((current) => current ? { ...current, [key]: value } : current);
+  };
+
+  const saveDraft = async () => {
+    if (!draft) return;
+    await onSave(draft);
+    setDraft(null);
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
@@ -3565,6 +3655,20 @@ const CalendarView = memo(function CalendarView({
           <CalendarDays className="size-5 text-brand" />
           Weekly Calendar View
         </h3>
+        <button
+          type="button"
+          onClick={() => {
+            setDirectEdit((enabled) => !enabled);
+            setDraft(null);
+          }}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition ${directEdit
+            ? "bg-brand text-white"
+            : "border border-stone-200 text-black/70 hover:bg-stone-50"
+            }`}
+        >
+          <Pencil className="size-4" />
+          {directEdit ? "Done editing" : "Edit directly"}
+        </button>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -3594,21 +3698,98 @@ const CalendarView = memo(function CalendarView({
 
                     return (
                       <td key={`${day}-${slot.start}`} className="px-1 py-1 min-h-[60px]">
-                        {dayEntries.map((entry) => (
-                          <div
-                            key={entry.id}
-                            onClick={() => onEdit(entry)}
-                            className={`text-xs p-1.5 rounded-lg cursor-pointer hover:opacity-80 transition ${entry.cycle === "first" ? "bg-blue-50 border border-blue-200" : "bg-purple-50 border border-purple-200"
-                              }`}
-                          >
-                            <div className="font-semibold truncate">{entry.teacherName}</div>
-                            <div className={`truncate ${entry.subjectName.includes('/') ? 'text-amber-700 font-bold' : 'text-black/60'}`}>
-                              {entry.subjectName}
-                            </div>
-                            <div className="truncate text-black/40 text-[10px]">{entry.className}</div>
-                            <div className="text-[10px] font-bold text-brand mt-0.5">{entry.ratePerPeriod} FRS</div>
-                          </div>
-                        ))}
+                        {dayEntries.map((entry) => {
+                          const isEditing = draft?.id === entry.id || draft?._id === entry._id;
+                          if (isEditing && draft) {
+                            return (
+                              <div key={entry.id} className="text-xs p-2 rounded-lg bg-amber-50 border border-amber-300 space-y-1.5">
+                                <select
+                                  value={draft.teacherId}
+                                  onChange={(event) => {
+                                    const teacher = teachers.find((item) => item._id === event.target.value);
+                                    updateDraft("teacherId", event.target.value);
+                                    updateDraft("teacherName", teacher?.name || "");
+                                  }}
+                                  className="w-full rounded border border-amber-200 bg-white px-1.5 py-1 text-[11px]"
+                                  aria-label="Teacher"
+                                >
+                                  {teachers.map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.name}</option>)}
+                                </select>
+                                <select
+                                  value={draft.subjectId}
+                                  onChange={(event) => {
+                                    const subject = subjects.find((item) => item._id === event.target.value);
+                                    updateDraft("subjectId", event.target.value);
+                                    updateDraft("subjectName", subject?.name || "");
+                                    updateDraft("subjectCode", subject?.code || "");
+                                  }}
+                                  className="w-full rounded border border-amber-200 bg-white px-1.5 py-1 text-[11px]"
+                                  aria-label="Subject"
+                                >
+                                  {subjects.map((subject) => <option key={subject._id} value={subject._id}>{subject.name}</option>)}
+                                </select>
+                                <select
+                                  value={draft.classId}
+                                  onChange={(event) => {
+                                    const classItem = classes.find((item) => item._id === event.target.value);
+                                    updateDraft("classId", event.target.value);
+                                    updateDraft("className", classItem ? classLabel(classItem) : "");
+                                    updateDraft("cycle", classItem?.cycle === "1st Cycle" ? "first" : "second");
+                                    updateDraft("ratePerPeriod", classItem?.cycle === "1st Cycle" ? CYCLE_RATES.first : CYCLE_RATES.second);
+                                  }}
+                                  className="w-full rounded border border-amber-200 bg-white px-1.5 py-1 text-[11px]"
+                                  aria-label="Class"
+                                >
+                                  {classes.map((classItem) => <option key={classItem._id} value={classItem._id}>{classLabel(classItem)}</option>)}
+                                </select>
+                                <select
+                                  value={`${draft.day}|${draft.startTime}`}
+                                  onChange={(event) => {
+                                    const [nextDay, nextStart] = event.target.value.split("|");
+                                    const nextSlot = schedule.find((item) => item.start === nextStart);
+                                    updateDraft("day", nextDay);
+                                    updateDraft("startTime", nextStart);
+                                    updateDraft("endTime", nextSlot?.end || draft.endTime);
+                                    updateDraft("periodNumber", Number(nextSlot?.label || draft.periodNumber));
+                                  }}
+                                  className="w-full rounded border border-amber-200 bg-white px-1.5 py-1 text-[11px]"
+                                  aria-label="Day and period"
+                                >
+                                  {days.flatMap((scheduleDay) => schedule.map((scheduleSlot) => (
+                                    <option key={`${scheduleDay}-${scheduleSlot.start}`} value={`${scheduleDay}|${scheduleSlot.start}`}>
+                                      {scheduleDay.slice(0, 3)} {formatEnglishTime(scheduleSlot.start)}
+                                    </option>
+                                  )))}
+                                </select>
+                                <div className="flex gap-1 pt-0.5">
+                                  <button type="button" onClick={saveDraft} disabled={isSaving} className="flex-1 rounded bg-brand px-1.5 py-1 text-[11px] font-bold text-white disabled:opacity-50">
+                                    {isSaving ? "Saving" : "Save"}
+                                  </button>
+                                  <button type="button" onClick={() => setDraft(null)} disabled={isSaving} className="rounded border border-stone-300 bg-white px-1.5 py-1 text-[11px] font-semibold text-black/60 disabled:opacity-50">
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <button
+                              key={entry.id}
+                              type="button"
+                              onClick={() => startDirectEdit(entry)}
+                              className={`w-full text-left text-xs p-1.5 rounded-lg cursor-pointer hover:opacity-80 transition ${entry.cycle === "first" ? "bg-blue-50 border border-blue-200" : "bg-purple-50 border border-purple-200"
+                                }`}
+                            >
+                              <div className="font-semibold truncate">{entry.teacherName}</div>
+                              <div className={`truncate ${entry.subjectName.includes('/') ? 'text-amber-700 font-bold' : 'text-black/60'}`}>
+                                {entry.subjectName}
+                              </div>
+                              <div className="truncate text-black/40 text-[10px]">{entry.className}</div>
+                              <div className="text-[10px] font-bold text-brand mt-0.5">{entry.ratePerPeriod} FRS</div>
+                            </button>
+                          );
+                        })}
                       </td>
                     );
                   })}
@@ -3628,7 +3809,7 @@ const CalendarView = memo(function CalendarView({
           <span className="text-black/60">2nd Cycle</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-black/40">Click on any period to edit</span>
+          <span className="text-black/40">Use “Edit directly” to change a period here, without opening a modal</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-amber-700 font-semibold">Multi-subject</span>
@@ -3654,28 +3835,79 @@ function TimetableEntryModal({
   teachers: Teacher[];
   classes: Class[];
   subjects: Subject[];
-  onSave: (entry: TimetableEntry) => void;
+  onSave: (entry: TimetableEntry | TimetableEntry[]) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<TimetableEntry>(() => sanitizeEntry(initial));
   const [saving, setSaving] = useState(false);
+  const [selectedClassIds, setSelectedClassIds] = useState<string[]>(() =>
+    initial.classId && initial.classId !== "" ? [initial.classId] : []
+  );
 
   useEffect(() => {
     setForm(sanitizeEntry(initial));
+    setSelectedClassIds(initial.classId && initial.classId !== "" ? [initial.classId] : []);
   }, [initial]);
 
   const set = <K extends keyof TimetableEntry>(k: K, v: TimetableEntry[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const isNewEntry = !initial._id && !initial.id?.startsWith('6a') || initial.id?.startsWith('entry_');
 
-  const handleSubmit = () => {
-    const { startTime, endTime } = sanitizeTimes(form.startTime, form.endTime);
+  const classNameFor = (cls: Class) =>
+    cls.department ? `${cls.className} ${cls.department}` : cls.className;
 
-    const finalEntry: TimetableEntry = { ...form, startTime, endTime };
+  const toggleClass = (cls: Class) => {
+    setSelectedClassIds((prev) =>
+      prev.includes(cls._id) ? prev.filter((id) => id !== cls._id) : [...prev, cls._id]
+    );
+  };
+
+  const groupedClasses = useMemo(() => {
+    const map = new Map<string, Class[]>();
+    classes.forEach((c) => {
+      if (!map.has(c.className)) map.set(c.className, []);
+      map.get(c.className)!.push(c);
+    });
+    return Array.from(map.entries()).map(([level, list]) => [
+      level,
+      [...list].sort((a, b) => (a.department || "").localeCompare(b.department || "")),
+    ] as [string, Class[]]);
+  }, [classes]);
+
+  const handleSubmit = () => {
+    if (selectedClassIds.length === 0) {
+      toast.error("Please select at least one class");
+      return;
+    }
+
+    const { startTime, endTime } = sanitizeTimes(form.startTime, form.endTime);
+    const baseEntry: TimetableEntry = { ...form, startTime, endTime };
+
+    const chosen = classes.filter((c) => selectedClassIds.includes(c._id));
+    if (chosen.length === 0) {
+      toast.error("Please select at least one class");
+      return;
+    }
+
+    // The original class (when editing) keeps its id so it is UPDATED;
+    // every additional selected class becomes a NEW entry for the same
+    // subject/teacher/day/time.
+    const entries: TimetableEntry[] = chosen.map((cls) => {
+      if (cls._id === baseEntry.classId) {
+        return { ...baseEntry, classId: cls._id, className: classNameFor(cls) };
+      }
+      return {
+        ...baseEntry,
+        id: `entry_${Date.now()}_${cls._id}`,
+        _id: undefined,
+        classId: cls._id,
+        className: classNameFor(cls),
+      };
+    });
 
     setSaving(true);
     try {
-      onSave(finalEntry);
+      onSave(entries.length === 1 ? entries[0] : entries);
     } finally {
       setSaving(false);
     }
@@ -3723,13 +3955,37 @@ function TimetableEntryModal({
                   <option value="">Select Teacher</option>
                   {teachers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
                 </select></td>
-                <td className="p-2"><select value={form.classId} onChange={(e) => {
-                  const cls = classes.find(c => c._id === e.target.value);
-                  setForm((f) => ({ ...f, classId: e.target.value, className: cls?.department ? `${cls.className} ${cls.department}` : cls?.className || "" }));
-                }} className={inputCls}>
-                  <option value="">Select Class</option>
-                  {classes.map((c) => <option key={c._id} value={c._id}>{c.department ? `${c.className} ${c.department}` : c.className}</option>)}
-                </select></td>
+                <td className="p-2">
+                  <div className="text-[10px] font-bold text-black/50 uppercase mb-1">
+                    Classes ({selectedClassIds.length} selected)
+                  </div>
+                  <div className="border border-stone-200 rounded-lg max-h-48 overflow-y-auto p-1 space-y-1 bg-white">
+                    {groupedClasses.length === 0 && (
+                      <div className="px-1 py-1 text-xs text-black/40">No classes available</div>
+                    )}
+                    {groupedClasses.map(([level, list]) => (
+                      <div key={level}>
+                        <div className="px-1 pt-1 pb-0.5 text-[10px] font-bold text-black/40 uppercase">{level}</div>
+                        {list.map((cls) => {
+                          const checked = selectedClassIds.includes(cls._id);
+                          return (
+                            <label key={cls._id} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-stone-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleClass(cls)}
+                                className="accent-brand size-3.5"
+                              />
+                              <span className={checked ? "text-xs font-semibold text-black/80" : "text-xs text-black/50"}>
+                                {cls.department || cls.className}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </td>
                 <td className="p-2"><select value={form.subjectId} onChange={(e) => {
                   const subject = subjects.find(s => s._id === e.target.value);
                   setForm((f) => ({ ...f, subjectId: e.target.value, subjectName: subject?.name || "", subjectCode: subject?.code || "" }));
@@ -3746,15 +4002,24 @@ function TimetableEntryModal({
         </div>
         <div className="mt-3 flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 text-sm">
           <span className="font-medium">Rate per period</span>
-          <span className="font-bold text-brand">{form.ratePerPeriod} FRS</span>
+          <span className="font-bold text-brand">
+            {selectedClassIds.length > 1
+              ? `${selectedClassIds.length} × ${form.ratePerPeriod} FRS = ${selectedClassIds.length * form.ratePerPeriod} FRS`
+              : `${form.ratePerPeriod} FRS`}
+          </span>
         </div>
 
         <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
           <p className="text-sm text-amber-800">
-            <span className="font-bold">💡 Multi-Subject Support:</span>
+            <span className="font-bold">💡 Multi-Subject & Multi-Class Support:</span>
             <br />
             You can add multiple subjects to the same class at the same time.
             Just make sure each subject has a <span className="font-bold">different teacher</span>.
+            <br />
+            A teacher can also be assigned to <span className="font-bold">different classes</span> in the same period (e.g. combined classes).
+            <br />
+            In the <span className="font-bold">Class</span> column you can tick <span className="font-bold">multiple classes / departments</span>
+            to schedule the same subject for several classes in a single period.
             <br />
             <span className="text-xs text-amber-600 mt-1 block">
               Example: Form 4A can have both Math (Teacher A) and Physics (Teacher B) at 08:00-09:00
