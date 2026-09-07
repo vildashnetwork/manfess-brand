@@ -456,16 +456,18 @@ export function TeacherTimetableView() {
         throw new Error('No teacher ID found');
       }
 
-      // Only entries for the configured academic year — exactly the ones the
-      // Auto-Generate generator created with the configured period times.
-      const response = await axios.get(`${API_BASE}/teacher/timetable`, {
-        params: { teacherId, academicYear: ACADEMIC_YEAR }
+      // The backend exposes the teacher's timetable at
+      // GET /timetable/teacher/:teacherId — it returns a FLAT array of
+      // populated entries (classId -> {className, department},
+      // subjectId -> {name, code}), grouped client-side below.
+      const response = await axios.get(`${API_BASE}/timetable/teacher/${teacherId}`, {
+        params: { academicYear: ACADEMIC_YEAR }
       });
 
       if (response.data.success) {
-        const data = response.data.data;
+        const rawEntries: any[] = Array.isArray(response.data.data) ? response.data.data : [];
 
-        const mappedTimetable = data.timetable.map((entry: any) => {
+        const mapEntry = (entry: any): TimetableEntry => {
           const className = entry.classId?.className || entry.className || 'Unknown Class';
           const department = entry.classId?.department || '';
           const fullClassName = department ? `${className} (${department})` : className;
@@ -474,44 +476,62 @@ export function TeacherTimetableView() {
 
           return {
             ...entry,
+            id: entry._id || entry.id,
             className: fullClassName,
             subjectName: subjectName,
             subjectCode: subjectCode,
-            teacherName: entry.teacherId?.name || entry.teacherName || 'Unknown Teacher',
+            teacherName: entry.teacherId?.name || entry.teacherName || (user as any)?.name || 'Teacher',
             classData: entry.classId,
             subjectData: entry.subjectId
           };
-        });
+        };
 
+        const mappedTimetable = rawEntries.map(mapEntry);
+
+        // Group by day locally (backend returns a flat array), keeping every
+        // configured school day as a key so Weekly/Daily views render correctly.
+        const orderedDays = orderSchoolDays(activeSettings.schoolDays);
         const groupedByDay: Record<string, TimetableEntry[]> = {};
-        Object.keys(data.groupedByDay || {}).forEach(day => {
-          groupedByDay[day] = (data.groupedByDay[day] || []).map((entry: any) => {
-            const className = entry.classId?.className || entry.className || 'Unknown Class';
-            const department = entry.classId?.department || '';
-            const fullClassName = department ? `${className} (${department})` : className;
-            const subjectName = entry.subjectId?.name || entry.subjectName || 'Unknown Subject';
-            const subjectCode = entry.subjectId?.code || entry.subjectCode || '';
-
-            return {
-              ...entry,
-              className: fullClassName,
-              subjectName: subjectName,
-              subjectCode: subjectCode,
-              teacherName: entry.teacherId?.name || entry.teacherName || 'Unknown Teacher'
-            };
-          });
+        orderedDays.forEach(day => { groupedByDay[day] = []; });
+        mappedTimetable.forEach((entry) => {
+          if (!groupedByDay[entry.day]) groupedByDay[entry.day] = [];
+          groupedByDay[entry.day].push(entry);
         });
+        Object.values(groupedByDay).forEach(list =>
+          list.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
+        );
 
-        const mappedData = {
-          ...data,
+        const stats: TeacherStats = {
+          totalPeriods: mappedTimetable.length,
+          firstCyclePeriods: mappedTimetable.filter(e => e.cycle === 'first').length,
+          secondCyclePeriods: mappedTimetable.filter(e => e.cycle === 'second').length,
+          totalPotentialEarnings: mappedTimetable.reduce((sum, e) => sum + (e.ratePerPeriod || 0), 0),
+          days: orderedDays
+        };
+
+        const mappedData: TimetableData = {
+          teacher: {
+            id: String(teacherId),
+            name: (user as any)?.name || 'Teacher',
+            email: (user as any)?.email || '',
+            username: (user as any)?.username || '',
+            qualification: (user as any)?.qualification || 'Teacher',
+            role: (user as any)?.role || 'teacher'
+          },
+          stats: stats,
           timetable: mappedTimetable,
-          groupedByDay: groupedByDay
+          groupedByDay: groupedByDay,
+          totalEntries: mappedTimetable.length
         };
 
         setTimetableData(mappedData);
         setSelectedDay('');
         setDaySchedule([]);
-        toast.success('Timetable loaded successfully');
+        if (mappedTimetable.length > 0) {
+          toast.success(`Timetable loaded — ${mappedTimetable.length} periods`);
+        } else {
+          toast.info(`No periods assigned to you yet for ${ACADEMIC_YEAR}`);
+        }
       } else {
         throw new Error(response.data.message || 'Failed to load timetable');
       }
