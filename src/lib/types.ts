@@ -25,6 +25,8 @@ export interface Student {
   parentPhone: string;
   address: string;
   photoUrl?: string;
+  photoCloudinaryUrl?: string;
+  photoLocalUrl?: string;
   registrationDate: string;
   feesPaid: number;
   feesDue: number;

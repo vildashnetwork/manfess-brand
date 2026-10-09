@@ -6,12 +6,37 @@ import {
   Sun, Moon, Settings, Bell, Award, DollarSign, Download, Printer,
   ChevronDown, ChevronUp, Plus, Trash2, Edit, Save, Filter,
   CheckCircle, XCircle, Clock as ClockIcon, UserCheck, UserX,
-  FileText, CreditCard, Receipt, TrendingUp, TrendingDown, RefreshCw
+  FileText, CreditCard, Receipt, TrendingUp, TrendingDown, RefreshCw,
+  Loader2
 } from "lucide-react";
+import { CompactPageLoader } from "@/components/CompactPageLoader";
 import { toast } from "sonner";
 import axios from "axios";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5000/api";
+
+const formatAttendanceDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getAttendanceWeekdays = (dateValue: string) => {
+  const [year, month, day] = dateValue.split('-').map(Number);
+  const monday = new Date(year, month - 1, day);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+
+  return Array.from({ length: 5 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return {
+      value: formatAttendanceDate(date),
+      dayName: date.toLocaleDateString(undefined, { weekday: 'long' }),
+      shortDate: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    };
+  });
+};
 
 // ============================================
 // TYPES
@@ -24,6 +49,7 @@ interface Teacher {
   phone: string;
   qualification: string;
   role: string;
+  monthlySalary?: number;
 }
 
 interface AttendanceRecord {
@@ -54,6 +80,15 @@ interface SalaryRecord {
     firstCycle: number;
     secondCycle: number;
   };
+  paymentMode?: "hourly" | "monthly";
+  monthlyAmount?: number;
+  classBreakdown?: Array<{
+    classId: string;
+    className: string;
+    periods: number;
+    ratePerPeriod: number;
+    amount: number;
+  }>;
   grossSalary: number;
   deductions: {
     total: number;
@@ -85,16 +120,16 @@ export function TeacherAttendancePage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState<string>("");
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  const [selectedDate, setSelectedDate] = useState<string>(formatAttendanceDate(new Date()));
   const [selectedMonth, setSelectedMonth] = useState<string>(
     String(new Date().getMonth() + 1).padStart(2, '0')
   );
   const [selectedYear, setSelectedYear] = useState<string>(
     String(new Date().getFullYear())
   );
-  const [viewMode, setViewMode] = useState<"daily" | "monthly">("daily");
+  const [viewMode, setViewMode] = useState<"weekly" | "monthly">("weekly");
+  const [weeklyOverrides, setWeeklyOverrides] = useState<Record<string, AttendanceRecord['status']>>({});
+  const [savingWeek, setSavingWeek] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -114,8 +149,11 @@ export function TeacherAttendancePage() {
     try {
       const response = await axios.get(`${API_BASE}/users?role=teacher`);
       if (response.data.success) {
-        setTeachers(response.data.data);
-        return response.data.data;
+        const teacherAccounts = response.data.data.filter(
+          (user: Teacher) => user.role?.trim().toLowerCase() === 'teacher'
+        );
+        setTeachers(teacherAccounts);
+        return teacherAccounts;
       }
     } catch (error) {
       console.error('Error fetching teachers:', error);
@@ -137,19 +175,46 @@ export function TeacherAttendancePage() {
       const params = new URLSearchParams();
       if (selectedTeacher) params.append('teacherId', selectedTeacher);
 
-      if (viewMode === 'daily' && selectedDate) {
-        params.append('date', selectedDate);
-      } else if (viewMode === 'monthly' && selectedMonth && selectedYear) {
-        params.append('month', selectedMonth);
-        params.append('year', selectedYear);
+      let records: any[];
+      if (viewMode === 'weekly' && selectedDate) {
+        const weekdays = getAttendanceWeekdays(selectedDate);
+        const dayResponses = await Promise.all(weekdays.map((weekday) =>
+          axios.get(`${API_BASE}/attendance?${new URLSearchParams({
+            ...(selectedTeacher ? { teacherId: selectedTeacher } : {}),
+            date: weekday.value,
+          }).toString()}`)
+        ));
+        records = dayResponses.flatMap((response) => response.data.success ? response.data.data : []);
+      } else {
+        if (selectedMonth && selectedYear) {
+          params.append('month', selectedMonth);
+          params.append('year', selectedYear);
+        }
+        const response = await axios.get(`${API_BASE}/attendance?${params.toString()}`);
+        records = response.data.data || [];
       }
 
-      const response = await axios.get(`${API_BASE}/attendance?${params.toString()}`);
-      if (response.data.success) {
-        setAttendance(response.data.data);
-        calculateStats(response.data.data);
-        return response.data.data;
-      }
+      const normalized = records.map((record) => {
+        const populatedTeacher = record.teacherId && typeof record.teacherId === 'object' ? record.teacherId : null;
+        const teacherId = String(populatedTeacher?._id || record.teacherId || '');
+        const teacher = teachers.find((item) => item._id === teacherId);
+        return {
+          ...record,
+          id: String(record._id || record.id),
+          teacherId,
+          teacherName: record.teacherName || populatedTeacher?.name || teacher?.name || 'Unknown teacher',
+          date: new Date(record.date).toISOString().slice(0, 10),
+          checkIn: record.checkIn || '',
+          checkOut: record.checkOut || '',
+          status: record.status || 'present',
+          hoursWorked: record.hoursWorked || 0,
+          periodsTaught: record.periodsTaught || 0,
+        } as AttendanceRecord;
+      });
+      setAttendance(normalized);
+      setWeeklyOverrides({});
+      calculateStats(normalized);
+      return normalized;
     } catch (error) {
       console.error('Error fetching attendance:', error);
       // Generate mock attendance
@@ -159,6 +224,69 @@ export function TeacherAttendancePage() {
       return mockAttendance;
     }
   }, [selectedTeacher, selectedDate, selectedMonth, selectedYear, viewMode, teachers]);
+
+  const attendanceWeekdays = getAttendanceWeekdays(selectedDate);
+  const today = formatAttendanceDate(new Date());
+
+  const getWeeklyStatus = (teacherId: string, date: string) => {
+    const key = `${teacherId}:${date}`;
+    return weeklyOverrides[key]
+      || attendance.find((record) => record.teacherId === teacherId && record.date === date)?.status
+      || 'absent';
+  };
+
+  const saveWeeklyAttendance = async () => {
+    const daysToSave = attendanceWeekdays.filter((weekday) => weekday.value <= today);
+    const teachersToSave = teachers.filter((teacher) =>
+      (!selectedTeacher || teacher._id === selectedTeacher)
+      && (!searchTerm || teacher.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+    if (!daysToSave.length || !teachersToSave.length) {
+      toast.error('No teachers or current weekdays are available to save');
+      return;
+    }
+
+    setSavingWeek(true);
+    try {
+      const creates: Record<string, unknown>[] = [];
+      const updates: AttendanceRecord[] = [];
+      for (const teacher of teachersToSave) {
+        for (const weekday of daysToSave) {
+          const existing = attendance.find((record) => record.teacherId === teacher._id && record.date === weekday.value);
+          const status = getWeeklyStatus(teacher._id, weekday.value);
+          const date = new Date(`${weekday.value}T00:00:00`);
+          const month = date.getMonth();
+          const year = date.getFullYear();
+          const details = {
+            teacherId: teacher._id,
+            date: weekday.value,
+            checkIn: status === 'absent' ? '' : existing?.checkIn || '',
+            checkOut: status === 'absent' ? '' : existing?.checkOut || '',
+            status,
+            hoursWorked: status === 'absent' ? 0 : existing?.hoursWorked || 0,
+            periodsTaught: status === 'absent' ? 0 : existing?.periodsTaught || 0,
+            academicYear: month >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`,
+            term: month >= 8 ? 'first' : month <= 3 ? 'second' : 'third',
+          };
+
+          if (existing) updates.push({ ...existing, ...details });
+          else creates.push(details);
+        }
+      }
+
+      await Promise.all([
+        ...(creates.length ? [axios.post(`${API_BASE}/attendance/bulk`, { records: creates })] : []),
+        ...updates.map((record) => axios.put(`${API_BASE}/attendance/${record.id}`, record)),
+      ]);
+      await fetchAttendance();
+      toast.success('Teacher attendance saved for the selected weekdays');
+    } catch (error: any) {
+      console.error('Error saving weekly teacher attendance:', error);
+      toast.error(error.response?.data?.message || 'Could not save teacher attendance');
+    } finally {
+      setSavingWeek(false);
+    }
+  };
 
   const generateMockAttendance = (teachersList: Teacher[]) => {
     const mockAttendance: AttendanceRecord[] = [];
@@ -285,14 +413,7 @@ export function TeacherAttendancePage() {
   // ============================================
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-3 text-sm text-black/60 font-medium">Loading attendance...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading attendance..." />;
   }
 
   return (
@@ -363,10 +484,10 @@ export function TeacherAttendancePage() {
 
         <div className="flex gap-1 border border-stone-200 rounded-xl p-0.5 sm:p-1">
           <button
-            onClick={() => setViewMode('daily')}
-            className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition ${viewMode === 'daily' ? 'bg-brand text-white' : 'hover:bg-stone-100'}`}
+            onClick={() => setViewMode('weekly')}
+            className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition ${viewMode === 'weekly' ? 'bg-brand text-white' : 'hover:bg-stone-100'}`}
           >
-            Daily
+            Week
           </button>
           <button
             onClick={() => setViewMode('monthly')}
@@ -376,12 +497,13 @@ export function TeacherAttendancePage() {
           </button>
         </div>
 
-        {viewMode === 'daily' ? (
+        {viewMode === 'weekly' ? (
           <input
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="px-2 sm:px-4 py-1.5 sm:py-2.5 rounded-xl border border-stone-200 bg-white text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            aria-label="Choose a date in the attendance week"
           />
         ) : (
           <>
@@ -407,75 +529,136 @@ export function TeacherAttendancePage() {
             </select>
           </>
         )}
+        {viewMode === 'weekly' && (
+          <button
+            onClick={saveWeeklyAttendance}
+            disabled={savingWeek || teachers.length === 0}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#121212] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
+          >
+            {savingWeek ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {savingWeek ? 'Saving...' : 'Save Week'}
+          </button>
+        )}
       </div>
 
       {/* Attendance Table */}
-      <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[800px] sm:min-w-full">
-            <thead>
-              <tr className="bg-stone-50 border-b border-stone-200">
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Teacher</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Date</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Check In</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Check Out</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Status</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Hours</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Periods</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Notes</th>
-                <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAttendance.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-black/40">
-                    <CalendarDays className="size-10 sm:size-12 mx-auto text-black/20 mb-2" />
-                    <p className="text-sm">No attendance records found</p>
-                  </td>
+      {viewMode === 'weekly' ? (
+        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <div className="min-w-[760px]">
+              <div className="grid grid-cols-[minmax(200px,2fr)_repeat(5,minmax(96px,1fr))] border-b border-stone-200 bg-stone-50 text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">
+                <div className="px-3 py-3">Teacher</div>
+                {attendanceWeekdays.map((weekday) => (
+                  <div key={weekday.value} className="px-2 py-3 text-center">
+                    <div>{weekday.dayName}</div>
+                    <div className="mt-1 font-medium normal-case tracking-normal text-black/45">{weekday.shortDate}</div>
+                  </div>
+                ))}
+              </div>
+              {teachers
+                .filter((teacher) => (!selectedTeacher || teacher._id === selectedTeacher)
+                  && (!searchTerm || teacher.name.toLowerCase().includes(searchTerm.toLowerCase())))
+                .map((teacher) => (
+                  <div key={teacher._id} className="grid grid-cols-[minmax(200px,2fr)_repeat(5,minmax(96px,1fr))] min-h-14 border-b border-stone-100 last:border-b-0">
+                    <div className="flex items-center px-3 py-3 text-sm font-medium text-[#121212]">{teacher.name}</div>
+                    {attendanceWeekdays.map((weekday) => {
+                      const status = getWeeklyStatus(teacher._id, weekday.value);
+                      const isFuture = weekday.value > today;
+                      return (
+                        <label key={weekday.value} className={`flex items-center justify-center border-l border-stone-100 ${isFuture ? 'bg-stone-50' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={status === 'present' || status === 'late'}
+                            disabled={isFuture || savingWeek}
+                            aria-label={`${weekday.dayName} ${weekday.shortDate}: ${teacher.name} present`}
+                            onChange={(event) => setWeeklyOverrides((previous) => ({
+                              ...previous,
+                              [`${teacher._id}:${weekday.value}`]: event.target.checked ? 'present' : 'absent',
+                            }))}
+                            className="size-5 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-30"
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                ))}
+              {teachers.length === 0 && (
+                <div className="px-4 py-10 text-center text-sm text-black/50">No teachers found.</div>
+              )}
+            </div>
+          </div>
+          <div className="border-t border-stone-200 px-4 py-3 text-xs text-black/50">
+            Check a weekday to mark the teacher present. Unchecked past or current weekdays are saved as absent; future dates are disabled.
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px] sm:min-w-full">
+              <thead>
+                <tr className="bg-stone-50 border-b border-stone-200">
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Teacher</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Date</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Check In</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Check Out</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Status</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Hours</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Periods</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Notes</th>
+                  <th className="px-2 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-bold text-black/50 uppercase tracking-wider">Actions</th>
                 </tr>
-              ) : (
-                filteredAttendance.map((record) => (
-                  <tr key={record.id} className="border-b border-stone-100 hover:bg-stone-50 transition">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-medium">{record.teacherName}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{new Date(record.date).toLocaleDateString()}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.checkIn || '-'}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.checkOut || '-'}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5">
-                      <span className={`badge ${record.status === 'present' ? 'badge-success' : record.status === 'late' ? 'badge-warning' : record.status === 'excused' ? 'badge-blue' : 'badge-danger'} text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1`}>
-                        {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
-                      </span>
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.hoursWorked || '-'}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.periodsTaught || '-'}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm max-w-[100px] truncate">{record.notes || '-'}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-center">
-                      <div className="flex justify-center gap-1">
-                        <button
-                          onClick={() => setEditingRecord(record)}
-                          className="p-1 rounded-lg hover:bg-stone-100 text-black/60 transition"
-                        >
-                          <Edit className="size-3 sm:size-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAttendance(record.id)}
-                          className="p-1 rounded-lg hover:bg-red-50 text-red-500 transition"
-                        >
-                          <Trash2 className="size-3 sm:size-4" />
-                        </button>
-                      </div>
+              </thead>
+              <tbody>
+                {filteredAttendance.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-black/40">
+                      <CalendarDays className="size-10 sm:size-12 mx-auto text-black/20 mb-2" />
+                      <p className="text-sm">No attendance records found</p>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredAttendance.map((record) => (
+                    <tr key={record.id} className="border-b border-stone-100 hover:bg-stone-50 transition">
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-medium">{record.teacherName}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{new Date(record.date).toLocaleDateString()}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.checkIn || '-'}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.checkOut || '-'}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5">
+                        <span className={`badge ${record.status === 'present' ? 'badge-success' : record.status === 'late' ? 'badge-warning' : record.status === 'excused' ? 'badge-blue' : 'badge-danger'} text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1`}>
+                          {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.hoursWorked || '-'}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm">{record.periodsTaught || '-'}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm max-w-[100px] truncate">{record.notes || '-'}</td>
+                      <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-center">
+                        <div className="flex justify-center gap-1">
+                          <button
+                            onClick={() => setEditingRecord(record)}
+                            className="p-1 rounded-lg hover:bg-stone-100 text-black/60 transition"
+                          >
+                            <Edit className="size-3 sm:size-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteAttendance(record.id)}
+                            className="p-1 rounded-lg hover:bg-red-50 text-red-500 transition"
+                          >
+                            <Trash2 className="size-3 sm:size-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-3 sm:px-4 py-2 sm:py-3 border-t border-stone-200 text-xs sm:text-sm text-black/40 flex justify-between">
+            <span>Total: {filteredAttendance.length} records</span>
+            <span>Attendance Rate: {stats.total > 0 ? Math.round((stats.present / stats.total) * 100) : 0}%</span>
+          </div>
         </div>
-        <div className="px-3 sm:px-4 py-2 sm:py-3 border-t border-stone-200 text-xs sm:text-sm text-black/40 flex justify-between">
-          <span>Total: {filteredAttendance.length} records</span>
-          <span>Attendance Rate: {stats.total > 0 ? Math.round((stats.present / stats.total) * 100) : 0}%</span>
-        </div>
-      </div>
+      )}
 
       {/* Add/Edit Modal */}
       {(showAddModal || editingRecord) && (
@@ -714,9 +897,18 @@ export function TeacherSalaryPage() {
 
       const response = await axios.get(`${API_BASE}/salary?${params.toString()}`);
       if (response.data.success) {
-        setSalaries(response.data.data);
-        calculateSalaryStats(response.data.data);
-        return response.data.data;
+        const normalized = response.data.data.map((salary: any) => {
+          const teacherId = typeof salary.teacherId === "object" ? salary.teacherId?._id : salary.teacherId;
+          return {
+            ...salary,
+            id: String(salary._id || salary.id),
+            teacherId: String(teacherId || ""),
+            teacherName: salary.teacherName || salary.teacherId?.name || teachers.find((teacher) => teacher._id === String(teacherId))?.name || "Unknown teacher",
+          };
+        });
+        setSalaries(normalized);
+        calculateSalaryStats(normalized);
+        return normalized;
       }
     } catch (error) {
       console.error('Error fetching salaries:', error);
@@ -805,13 +997,27 @@ export function TeacherSalaryPage() {
       background: white;
     `;
 
+    const earningsRows = salary.paymentMode === 'monthly'
+      ? `<tr><td style="padding: 8px; border: 1px solid #ddd;">Monthly salary</td><td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${(salary.monthlyAmount ?? salary.grossSalary).toLocaleString()}</td></tr>`
+      : salary.classBreakdown?.length
+        ? salary.classBreakdown.map((item) => `
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;">${item.className}: ${item.periods} periods × ${item.ratePerPeriod.toLocaleString()} FRS</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${item.amount.toLocaleString()}</td>
+            </tr>
+          `).join('')
+        : `
+            <tr><td style="padding: 8px; border: 1px solid #ddd;">1st Cycle Periods (${salary.periodCounts.firstCycle} × ${salary.rates.firstCycle} FRS)</td><td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${(salary.periodCounts.firstCycle * salary.rates.firstCycle).toLocaleString()}</td></tr>
+            <tr><td style="padding: 8px; border: 1px solid #ddd;">2nd Cycle Periods (${salary.periodCounts.secondCycle} × ${salary.rates.secondCycle} FRS)</td><td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${(salary.periodCounts.secondCycle * salary.rates.secondCycle).toLocaleString()}</td></tr>
+          `;
+
     let html = `
       <div style="text-align: center; margin-bottom: 25px;">
-        <h1 style="color: #D4AF37; font-size: 24px; margin-bottom: 5px;">BELMON BILINGUAL HIGH SCHOOL</h1>
+        <h1 style="color: #155DAA; font-size: 24px; margin-bottom: 5px;">BCHS DOUALA</h1>
         <h2 style="color: #333; font-size: 18px;">Teacher Salary Statement</h2>
         <p style="color: #666; font-size: 14px; margin-top: 5px;">${salary.teacherName}</p>
         <p style="color: #999; font-size: 12px;">${salary.month} ${salary.year}</p>
-        <hr style="border: 1px solid #D4AF37; margin: 15px 0;">
+        <hr style="border: 1px solid #155DAA; margin: 15px 0;">
       </div>
     `;
 
@@ -819,7 +1025,7 @@ export function TeacherSalaryPage() {
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
         <div style="background: #f5f5f5; padding: 12px; border-radius: 8px;">
           <p style="font-size: 11px; color: #666; margin-bottom: 2px;">Total Periods</p>
-          <p style="font-size: 20px; font-weight: bold; color: #D4AF37;">${salary.periodCounts.total}</p>
+          <p style="font-size: 20px; font-weight: bold; color: #155DAA;">${salary.periodCounts.total}</p>
           <p style="font-size: 10px; color: #999;">1st Cycle: ${salary.periodCounts.firstCycle} | 2nd Cycle: ${salary.periodCounts.secondCycle}</p>
         </div>
         <div style="background: #f5f5f5; padding: 12px; border-radius: 8px;">
@@ -835,20 +1041,13 @@ export function TeacherSalaryPage() {
     html += `
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         <thead>
-          <tr style="background: #D4AF37; color: white;">
+          <tr style="background: #155DAA; color: white;">
             <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Description</th>
             <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">Amount (FRS)</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;">1st Cycle Periods (${salary.periodCounts.firstCycle} × 500 FRS)</td>
-            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${(salary.periodCounts.firstCycle * 500).toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;">2nd Cycle Periods (${salary.periodCounts.secondCycle} × 700 FRS)</td>
-            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${(salary.periodCounts.secondCycle * 700).toLocaleString()}</td>
-          </tr>
+          ${earningsRows}
           <tr style="background: #f5f5f5; font-weight: bold;">
             <td style="padding: 8px; border: 1px solid #ddd;">Gross Salary</td>
             <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${salary.grossSalary.toLocaleString()}</td>
@@ -861,7 +1060,7 @@ export function TeacherSalaryPage() {
           `).join('')}
           <tr style="background: #f5f5f5; font-weight: bold;">
             <td style="padding: 8px; border: 1px solid #ddd;">Net Salary</td>
-            <td style="padding: 8px; border: 1px solid #ddd; text-align: right; color: #D4AF37;">${salary.netSalary.toLocaleString()}</td>
+            <td style="padding: 8px; border: 1px solid #ddd; text-align: right; color: #155DAA;">${salary.netSalary.toLocaleString()}</td>
           </tr>
         </tbody>
       </table>
@@ -886,7 +1085,7 @@ export function TeacherSalaryPage() {
 
     html += `
       <div style="margin-top: 20px; text-align: center; color: #999; font-size: 11px; border-top: 1px solid #ddd; padding-top: 15px;">
-        <p>Generated on ${new Date().toLocaleString()} • BELMON BILINGUAL HIGH SCHOOL</p>
+        <p>Generated on ${new Date().toLocaleString()} • BCHS DOUALA</p>
         <div style="display: flex; justify-content: space-between; margin-top: 10px;">
           <div style="text-align: center;">
             <div style="border-bottom: 1px solid #333; width: 150px; margin: 0 auto;"></div>
@@ -932,7 +1131,10 @@ export function TeacherSalaryPage() {
       try {
         const teachersRes = await axios.get(`${API_BASE}/users?role=teacher`);
         if (teachersRes.data.success) {
-          setTeachers(teachersRes.data.data);
+          const teacherAccounts = teachersRes.data.data.filter(
+            (user: Teacher) => user.role?.trim().toLowerCase() === "teacher"
+          );
+          setTeachers(teacherAccounts);
         }
       } catch (error) {
         console.error('Error fetching teachers:', error);
@@ -962,14 +1164,7 @@ export function TeacherSalaryPage() {
   // ============================================
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-3 text-sm text-black/60 font-medium">Loading salaries...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading salaries..." />;
   }
 
   return (
@@ -995,8 +1190,13 @@ export function TeacherSalaryPage() {
               axios.post(`${API_BASE}/salary/generate`, {
                 month: parseInt(selectedMonth),
                 year: selectedYear
-              }).then(() => {
-                toast.success('Salaries generated');
+              }).then((response) => {
+                const result = response.data.data || {};
+                if (result.errors > 0) {
+                  toast.error(`${result.created || 0} salaries generated; ${result.errors} need attention`);
+                } else {
+                  toast.success(`${result.created || 0} salaries generated`);
+                }
                 fetchSalaries();
               }).catch(() => {
                 toast.error('Failed to generate salaries');
@@ -1012,7 +1212,7 @@ export function TeacherSalaryPage() {
               // Export to PDF all salaries
               salaries.forEach(s => printSalary(s));
             }}
-            className="flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-green-600 text-white text-xs sm:text-sm font-semibold hover:bg-green-700 transition"
+            className="flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-brand text-white text-xs sm:text-sm font-semibold hover:bg-brand/90 transition"
           >
             <Printer className="size-4" />
             Print All
@@ -1133,7 +1333,12 @@ export function TeacherSalaryPage() {
                         1st: {salary.periodCounts.firstCycle} | 2nd: {salary.periodCounts.secondCycle}
                       </span>
                     </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-medium">{salary.grossSalary.toLocaleString()} FRS</td>
+                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-medium">
+                      {salary.grossSalary.toLocaleString()} FRS
+                      <span className="block text-[9px] sm:text-[10px] font-normal text-black/40">
+                        {salary.paymentMode === "monthly" ? "Monthly rate" : "Per-period rates"}
+                      </span>
+                    </td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm text-red-500">{salary.deductions.total.toLocaleString()} FRS</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-bold text-brand">{salary.netSalary.toLocaleString()} FRS</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2.5">

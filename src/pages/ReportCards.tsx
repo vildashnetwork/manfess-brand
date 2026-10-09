@@ -4,6 +4,7 @@ import { FileText, ArrowRight, Search, Printer, FileSpreadsheet, Calendar, Award
 import { toast } from "sonner";
 import axios from "axios";
 import { currentUser } from "@/lib/auth";
+import { getStoredSchoolSection } from "@/lib/schoolSystem";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas-pro";
 
@@ -12,6 +13,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.
 interface Student {
   id: string;
   fullName: string;
+  matricule?: string;
   gender: string;
   dob: string;
   classId: string;
@@ -24,6 +26,17 @@ interface Student {
   feesPaid: number;
   feesDue: number;
   admissionNumber?: string;
+}
+
+interface AttendanceSummary {
+  studentId: string;
+  schoolDays: number;
+  sessions: number;
+  present: number;
+  absent: number;
+  late: number;
+  excused: number;
+  attendanceRate: number;
 }
 
 interface Subject {
@@ -137,8 +150,12 @@ export function ReportCardsIndex() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [classes, setClasses] = useState<Class[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
+  const [attendanceSummaries, setAttendanceSummaries] = useState<Record<string, AttendanceSummary>>({});
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(true);
+  const [classDataLoading, setClassDataLoading] = useState(false);
+  const [classDataRetry, setClassDataRetry] = useState(0);
+  const [loadError, setLoadError] = useState("");
   const [teacher, setTeacher] = useState<any>(null);
   const [generatingPDF, setGeneratingPDF] = useState(false);
 
@@ -150,21 +167,13 @@ export function ReportCardsIndex() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [studentsRes, subjectsRes, classesRes, marksRes, usersRes] = await Promise.all([
-        axios.get(`${API_BASE}/students`),
-        axios.get(`${API_BASE}/subjects`),
-        axios.get(`${API_BASE}/classes`),
-        axios.get(`${API_BASE}/marks`),
-        axios.get(`${API_BASE}/users`),
+      setLoadError("");
+      const activeSection = getStoredSchoolSection();
+      const [subjectsRes, classesRes, usersRes] = await Promise.all([
+        axios.get(`${API_BASE}/subjects`, { params: { section: activeSection } }),
+        axios.get(`${API_BASE}/classes`, { params: { section: activeSection } }),
+        axios.get(`${API_BASE}/users`, { params: { section: activeSection } }),
       ]);
-
-      if (studentsRes.data.success) {
-        const mappedStudents = studentsRes.data.data.map((s: any) => ({
-          ...s,
-          id: s._id || s.id
-        }));
-        setStudents(mappedStudents);
-      }
 
       if (subjectsRes.data.success) {
         const mappedSubjects = subjectsRes.data.data.map((s: any) => ({
@@ -191,14 +200,6 @@ export function ReportCardsIndex() {
         }
       }
 
-      if (marksRes.data.success) {
-        const mappedMarks = marksRes.data.data.map((m: any) => ({
-          ...m,
-          id: m._id || m.id
-        }));
-        setMarks(mappedMarks);
-      }
-
       if (usersRes.data.success) {
         const teacherUsers = usersRes.data.data.filter((u: any) => u.role === "teacher");
         const mappedTeachers = teacherUsers.map((t: any) => ({
@@ -216,6 +217,7 @@ export function ReportCardsIndex() {
       }
     } catch (error: any) {
       console.error("Error fetching data:", error);
+      setLoadError(error.response?.data?.message || "Could not load class and subject lists.");
       toast.error(error.response?.data?.message || "Failed to fetch data");
     } finally {
       setLoading(false);
@@ -225,6 +227,87 @@ export function ReportCardsIndex() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const selectedClass = useMemo(() => {
+    return classes.find((schoolClass) => schoolClass.id === classId);
+  }, [classes, classId]);
+
+  useEffect(() => {
+    if (!classId) {
+      setStudents([]);
+      setMarks([]);
+      setClassDataLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setClassDataLoading(true);
+    setLoadError("");
+    setStudents([]);
+    setMarks([]);
+
+    const params = selectedClass?.acedemicYear ? { academicYear: selectedClass.acedemicYear } : {};
+    Promise.all([
+      axios.get(`${API_BASE}/students/class/${classId}`),
+      axios.get(`${API_BASE}/marks`, { params: { classId, ...params } }),
+    ]).then(([studentsRes, marksRes]) => {
+      if (cancelled) return;
+      if (studentsRes.data.success) {
+        setStudents(studentsRes.data.data.map((student: any) => ({
+          ...student,
+          id: String(student._id || student.id),
+          classId: String(student.classId),
+          matricule: student.matricule || student.admissionNumber || "",
+          admissionNumber: student.admissionNumber || student.matricule || "",
+        })));
+      }
+      if (marksRes.data.success) {
+        setMarks(marksRes.data.data.map((mark: any) => ({
+          ...mark,
+          id: mark._id || mark.id,
+          studentId: String(mark.studentId),
+          subjectId: String(mark.subjectId),
+          classId: String(mark.classId),
+          academicyear: mark.academicyear || mark.academicYear || "",
+        })));
+      }
+    }).catch((error: any) => {
+      if (cancelled) return;
+      console.error("Error fetching class report data:", error);
+      setLoadError(error.response?.data?.message || "Could not load reports for this class.");
+    }).finally(() => {
+      if (!cancelled) setClassDataLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [classId, selectedClass?.acedemicYear, classDataRetry]);
+
+  useEffect(() => {
+    if (!classId || !selectedAcademicYear) {
+      setAttendanceSummaries({});
+      return;
+    }
+
+    let cancelled = false;
+    axios.get(`${API_BASE}/attendance/students/summary`, {
+      params: {
+        classId,
+        academicYear: selectedAcademicYear,
+        term: selectedTerm === "annual" ? "annual" : selectedTerm,
+      },
+    }).then((response) => {
+      if (!cancelled && response.data.success) {
+        setAttendanceSummaries(Object.fromEntries(
+          response.data.data.map((summary: AttendanceSummary) => [summary.studentId, summary]),
+        ));
+      }
+    }).catch((error) => {
+      console.error("Unable to load report-card attendance", error);
+      if (!cancelled) setAttendanceSummaries({});
+    });
+
+    return () => { cancelled = true; };
+  }, [classId, selectedAcademicYear, selectedTerm]);
 
   // Get unique academic years from classes
   const academicYears = useMemo(() => {
@@ -276,10 +359,6 @@ export function ReportCardsIndex() {
     }
     return filteredClasses;
   }, [filteredClasses, isTeacher, teacher]);
-
-  const selectedClass = useMemo(() => {
-    return classes.find((c) => c.id === classId);
-  }, [classes, classId]);
 
   const classSubjects = useMemo(() => {
     return subjects.filter((s) => s.classIds.includes(classId));
@@ -422,6 +501,16 @@ export function ReportCardsIndex() {
 
       return {
         student,
+        attendance: attendanceSummaries[student.id] || {
+          studentId: student.id,
+          schoolDays: 0,
+          sessions: 0,
+          present: 0,
+          absent: 0,
+          late: 0,
+          excused: 0,
+          attendanceRate: 0,
+        },
         subjectScores,
         overallAverage,
         totalWeighted,
@@ -432,12 +521,14 @@ export function ReportCardsIndex() {
     const avgValues = studentData.map((d) => ({ id: d.student.id, avg: d.overallAverage }));
     const ranks = rankWithTies(avgValues);
 
-    return studentData.map((d) => ({
-      ...d,
-      rank: ranks[d.student.id] || 0,
-      status: d.overallAverage >= 10 ? "Promoted" : "Repeat",
-    }));
-  }, [classStudents, classSubjects, marks, currentSequences, selectedTerm]);
+    return studentData
+      .map((d) => ({
+        ...d,
+        rank: ranks[d.student.id] || 0,
+        status: d.overallAverage >= 10 ? "Promoted" : "Repeat",
+      }))
+      .sort((first, second) => first.rank - second.rank || first.student.fullName.localeCompare(second.student.fullName));
+  }, [classStudents, classSubjects, marks, currentSequences, selectedTerm, attendanceSummaries]);
 
   const stats = useMemo(() => {
     const avgs = reportData.map((d) => d.overallAverage);
@@ -618,6 +709,18 @@ export function ReportCardsIndex() {
     const statusText = statusPass ? "Passed" : "Failed";
     const displayCols = ctx.displayColumns;
     const isThirdTerm = ctx.isThirdTerm;
+    const studentName = String(data.student.fullName || "Student");
+    const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    })[character] || character);
+    const matricule = data.student.matricule || data.student.admissionNumber || "Not assigned";
+    const defaultPortrait = data.student.gender === "female" ? "/female-student-avatar.svg" : "/male-student-avatar.svg";
+    const photoUrl = escapeHtml(data.student.photoUrl || defaultPortrait);
+    const portrait = `<img src="${photoUrl}" alt="${escapeHtml(studentName)}" crossorigin="anonymous" onerror="this.onerror=null;this.src='${defaultPortrait}'" style="width:100%;height:100%;object-fit:cover;display:block;background:#EAF2FB;"/>`;
 
     // Build sequence headers using display columns
     const seqHeaders = displayCols.map((col) =>
@@ -662,46 +765,55 @@ export function ReportCardsIndex() {
     const totalSeqCells = displayCols.map(() => `<td style="padding:5px 6px;border:1px solid #000000;text-align:center;">-</td>`).join("");
 
     return `
-      <div style="font-family:'Segoe UI',Arial,sans-serif;color:#121212;max-width:1000px;margin:0 auto;">
-        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding-bottom:14px;border-bottom:2px solid #000000;">
-          <div style="text-align:left;line-height:1.5;">
+      <div style="font-family:'Segoe UI',Arial,sans-serif;color:#17324D;max-width:1000px;margin:0 auto;border:1px solid #CADCF0;border-top:8px solid #155DAA;background:#ffffff;">
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:14px 16px;border-bottom:3px solid #d2ad4b;">
+          <div style="text-align:left;line-height:1.5;color:#155DAA;">
             République du Cameroun<br/>
-            <span style="font-weight:600;font-style:italic;text-transform:none;">Paix — Travail — Patrie</span><br/>
+            <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Paix — Travail — Patrie</span><br/>
             Ministère des Enseignements Secondaires
           </div>
           <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-            <div style="width:46px;height:46px;border-radius:12px;background:#000000;display:flex;align-items:center;justify-content:center;margin-bottom:2px;">
-              <svg viewBox="0 0 24 24" width="24" height="24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 1 8.5 12 14l8-4.09V17h1.5V8.5L12 3Zm0 8.9L4.5 8.5 12 4.9l7.5 3.6L12 11.9Z"/><path d="M6 12.18v3.7c0 1.9 2.69 3.62 6 3.62s6-1.72 6-3.62v-3.7l-6 2.9-6-2.9Z"/></svg>
+            <div style="width:48px;height:48px;border-radius:50%;background:#155DAA;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:12px;font-weight:900;">
+              BCHS
             </div>
-            <div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;text-transform:none;">MANFESS EVENING SCHOOL</div>
-            <div style="font-size:8.5px;color:#000000;font-weight:600;text-transform:none;">P.O. Box 1234, Yaoundé · MINESEC accredited</div>
+            <div style="font-size:17px;font-weight:900;color:#155DAA;text-transform:none;">BCHS DOUALA</div>
+            <div style="font-size:8.5px;color:#6b756d;font-weight:600;text-transform:none;">Excellence · Discipline · Service</div>
           </div>
-          <div style="text-align:right;line-height:1.5;">
+          <div style="text-align:right;line-height:1.5;color:#155DAA;">
             Republic of Cameroon<br/>
-            <span style="font-weight:600;font-style:italic;text-transform:none;">Peace — Work — Fatherland</span><br/>
+            <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Peace — Work — Fatherland</span><br/>
             Ministry of Secondary Education
           </div>
         </div>
 
-        <div style="text-align:center;margin:16px 0;">
-          <span style="display:inline-block;background:#000000;color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;padding:7px 22px;border-radius:999px;">${ctx.title} · Academic Year ${ctx.academicYear}</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 16px;padding:10px 14px;background:#EAF2FB;border-left:5px solid #155DAA;">
+          <div style="font-size:17px;font-weight:800;color:#155DAA;text-transform:uppercase;">${ctx.title} Report</div>
+          <div style="text-align:right;font-size:10px;font-weight:700;color:#52665a;">ACADEMIC YEAR<br/><span style="font-size:13px;color:#183328;">${escapeHtml(ctx.academicYear)}</span></div>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;margin-bottom:16px;">
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Student</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.fullName}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Admission №</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.admissionNumber || "N/A"}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Class</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.selectedClass?.className || ""}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Section</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.department}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Sex</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.gender === "male" ? "Male" : "Female"}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Date of Birth</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.student.dob}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Class Size</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${ctx.classSize}</div></div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;"><div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Position</div><div style="font-size:12px;font-weight:600;margin-top:2px;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div></div>
+        <div style="display:grid;grid-template-columns:116px 1fr;gap:14px;margin:0 16px 14px;padding:12px;border:1px solid #CADCF0;border-radius:8px;background:#fff;">
+          <div style="width:116px;height:142px;overflow:hidden;border:2px solid #d2ad4b;border-radius:6px;background:#EAF2FB;">${portrait}</div>
+          <div>
+            <div style="font-size:18px;font-weight:800;color:#155DAA;margin-bottom:8px;">${escapeHtml(studentName)}</div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;font-size:10px;">
+              <div><b style="color:#718076;">MATRICULE</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(matricule)}</span></div>
+              <div><b style="color:#718076;">CLASS</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(ctx.selectedClass?.className || "")}</span></div>
+              <div><b style="color:#718076;">DEPARTMENT</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.department || ctx.selectedClass?.department || "—")}</span></div>
+              <div><b style="color:#718076;">GENDER</b><br/><span style="font-weight:700;color:#183328;">${data.student.gender === "male" ? "Male" : "Female"}</span></div>
+              <div><b style="color:#718076;">DATE OF BIRTH</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.dob || "—")}</span></div>
+              <div><b style="color:#718076;">POSITION</b><br/><span style="font-weight:700;color:#183328;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</span></div>
+              <div><b style="color:#718076;">PARENT / GUARDIAN</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.parentName || "—")}</span></div>
+              <div><b style="color:#718076;">CONTACT</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.parentPhone || "—")}</span></div>
+              <div><b style="color:#718076;">CLASS SIZE</b><br/><span style="font-weight:700;color:#183328;">${ctx.classSize} learners</span></div>
+              <div style="grid-column:1 / -1;"><b style="color:#718076;">ADDRESS</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.address || "—")}</span></div>
+            </div>
+          </div>
         </div>
 
         <table style="width:100%;border-collapse:collapse;font-size:10px;border:1px solid #121212;margin-bottom:16px;">
           <thead>
-            <tr style="background:#000000;color:#fff;">
-              <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Discipline / Subject</th>
+            <tr style="background:#155DAA;color:#fff;">
+              <th style="padding:5px 6px;border:1px solid #d2ad4b;font-weight:700;text-align:center;font-size:10px;">Discipline / Subject</th>
               ${seqHeaders}
               <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Avg</th>
               <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Coef</th>
@@ -750,20 +862,16 @@ export function ReportCardsIndex() {
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;font-size:11px;">
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Conduct</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">Good</div>
+          <div style="margin-bottom:14px;padding:10px 12px;border:1px solid #CADCF0;border-radius:8px;background:#F4F8FD;">
+          <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#155DAA;margin-bottom:7px;">Attendance · ${escapeHtml(ctx.title)}</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:10px;">
+            <div><b>Present</b><br/>${data.attendance?.present ?? 0} days</div>
+            <div><b>Absent</b><br/>${data.attendance?.absent ?? 0} days</div>
+            <div><b>Late</b><br/>${data.attendance?.late ?? 0} days</div>
+            <div><b>Excused</b><br/>${data.attendance?.excused ?? 0} days</div>
+            <div><b>Attendance rate</b><br/>${data.attendance?.attendanceRate ?? 0}%</div>
           </div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Discipline</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">Satisfied</div>
-          </div>
-          <div style="border:1px solid #000000;border-radius:8px;padding:6px 10px;">
-            <div style="font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#000000;">Absences (h)</div>
-            <div style="font-size:12px;font-weight:600;margin-top:2px;">0</div>
-          </div>
-
+          <div style="font-size:8px;color:#718076;margin-top:5px;">${data.attendance?.schoolDays ?? 0} recorded school days · ${data.attendance?.sessions ?? 0} attendance sessions</div>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;">
@@ -796,22 +904,11 @@ export function ReportCardsIndex() {
         </div>
 
         <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #000000;padding-top:8px;font-size:8.5px;color:#000000;">
-          <div style="font-size:8.5px;color:#000000; font-weight:bold;">Issued by MAMS · MANFESS Evening School · ${new Date().toLocaleDateString()}</div>
+          <div style="font-size:8.5px;color:#000000; font-weight:bold;">Issued by BCHS DOUALA · ${new Date().toLocaleDateString()}</div>
           <div style="font-family:monospace; color:#000000; font-weight:bold;">VERIF#${data.student.id.toUpperCase()}-${ctx.termId.toUpperCase()}</div>
         </div>
       </div>
     `;
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-black/60">Loading data...</p>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -853,6 +950,7 @@ export function ReportCardsIndex() {
           className="px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-sm font-semibold"
         >
           <option value="">Select Class</option>
+          {loading && <option value="" disabled>Loading classes...</option>}
           {allowedClasses.map((c) => (
             <option key={c.id} value={c.id}>{c.className + " " + c.department}</option>
           ))}
@@ -870,7 +968,7 @@ export function ReportCardsIndex() {
 
         <button
           onClick={generateBulkPDF}
-          disabled={generatingPDF || reportData.length === 0}
+          disabled={generatingPDF || classDataLoading || reportData.length === 0}
           className="ml-auto flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50"
         >
           {generatingPDF ? (
@@ -885,6 +983,21 @@ export function ReportCardsIndex() {
           )}
         </button>
       </div>
+
+      {loadError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <span>{loadError}</span>
+          <button
+            onClick={() => {
+              void fetchData();
+              setClassDataRetry((attempt) => attempt + 1);
+            }}
+            className="font-bold underline underline-offset-2"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Stat label="Students" value={stats.total.toString()} />
@@ -907,6 +1020,13 @@ export function ReportCardsIndex() {
             <span>Pass: ≥10/20</span>
           </div>
         </div>
+
+        {classDataLoading && (
+          <div className="flex items-center gap-3 border-b border-stone-100 bg-[#EAF2FB] px-5 py-3 text-sm text-[#155DAA]" role="status">
+            <div className="size-4 animate-spin rounded-full border-2 border-[#155DAA] border-t-transparent" />
+            Loading this class’s students and marks…
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -953,7 +1073,7 @@ export function ReportCardsIndex() {
               {reportData.length === 0 && (
                 <tr>
                   <td colSpan={5} className="text-center py-12 text-black/40">
-                    {classId ? "No students found for this class." : "Please select a class."}
+                    {classDataLoading ? "Preparing this class’s reports…" : classId ? "No students found for this class." : "Please select a class."}
                   </td>
                 </tr>
               )}

@@ -10,8 +10,9 @@ import {
 import { toast } from "sonner";
 import axios from "axios";
 import html2canvas from "html2canvas-pro";
+import { getStoredSchoolSection } from "@/lib/schoolSystem";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "https://manfess-back.onrender.com/api";
+const API_BASE = import.meta.env.VITE_API_URL;
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 const CYCLE_RATES = { first: 500, second: 700 } as const;
 
@@ -230,7 +231,7 @@ function sanitizeEntry(entry: TimetableEntry): TimetableEntry {
 
 function saveToLocalStorage(key: string, data: any) {
   try {
-    localStorage.setItem(`timetable_${key}`, JSON.stringify(data));
+    localStorage.setItem(`timetable_${getStoredSchoolSection()}_${key}`, JSON.stringify(data));
   } catch (error) {
     console.error("Error saving to localStorage:", error);
   }
@@ -238,7 +239,7 @@ function saveToLocalStorage(key: string, data: any) {
 
 function loadFromLocalStorage(key: string) {
   try {
-    const data = localStorage.getItem(`timetable_${key}`);
+    const data = localStorage.getItem(`timetable_${getStoredSchoolSection()}_${key}`);
     return data ? JSON.parse(data) : null;
   } catch (error) {
     console.error("Error loading from localStorage:", error);
@@ -1232,9 +1233,9 @@ export function TimetableAdminPage() {
   const uniqueClasses = useMemo(() => classes, [classes]);
 
   // Memoize the initial entry for the TimetableEntryModal to prevent form reset on every render
-  const modalInitialEntry = useMemo(
+  const modalInitialEntry = useMemo<TimetableEntry>(
     () =>
-      editingEntry || {
+      editingEntry ?? {
         id: `entry_${Date.now()}`,
         teacherId: "",
         teacherName: "",
@@ -1247,7 +1248,7 @@ export function TimetableAdminPage() {
         startTime: "",
         endTime: "",
         periodNumber: 1,
-        cycle: "first",
+        cycle: "first" as const,
         ratePerPeriod: CYCLE_RATES.first,
         room: "",
         academicYear: academicYear,
@@ -1386,110 +1387,110 @@ export function TimetableAdminPage() {
 
           if (isExisting) {
             const existingEntry = workingEntries.find((e) => {
-            const matchById =
-              e.id === sanitizedEntry.id ||
-              e._id === sanitizedEntry.id ||
-              e.id === sanitizedEntry._id ||
-              e._id === sanitizedEntry._id ||
-              (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
-            return matchById;
-          });
-
-          const apiId = existingEntry?._id || existingEntry?.id || sanitizedEntry._id || sanitizedEntry.id;
-
-          if (!apiId) {
-            toast.error("Invalid entry ID");
-            setIsSaving(false);
-            return;
-          }
-
-          const result = await syncToAPI("PUT", `${API_BASE}/timetable/${apiId}`, apiData);
-
-          if (result?.success) {
-            workingEntries = workingEntries.map((e) => {
-              const isMatching =
+              const matchById =
                 e.id === sanitizedEntry.id ||
                 e._id === sanitizedEntry.id ||
                 e.id === sanitizedEntry._id ||
                 e._id === sanitizedEntry._id ||
                 (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
-
-              if (isMatching) {
-                return {
-                  ...sanitizedEntry,
-                  _id: e._id || sanitizedEntry._id,
-                  id: e.id || sanitizedEntry.id
-                };
-              }
-              return e;
+              return matchById;
             });
-            editedAny = true;
-          } else {
-            throw new Error(result?.message || "Failed to update");
-          }
-        } else {
-          try {
-            // Only block a genuine duplicate: the SAME teacher assigned to the
-            // SAME class at the SAME time. A teacher may teach multiple
-            // classes in one slot (combined classes), and a class may hold
-            // multiple subjects in one slot as long as the teachers differ.
-            const teacherConflict = workingEntries.find((e) =>
-              e.teacherId === sanitizedEntry.teacherId &&
-              e.day === sanitizedEntry.day &&
-              e.startTime === sanitizedEntry.startTime &&
-              e.academicYear === sanitizedEntry.academicYear &&
-              e.id !== sanitizedEntry.id &&
-              e._id !== sanitizedEntry._id &&
-              // Same class check (by id when available, otherwise by name)
-              (
-                (e.classId && sanitizedEntry.classId && e.classId === sanitizedEntry.classId) ||
-                (e.className && sanitizedEntry.className && e.className === sanitizedEntry.className)
-              )
-            );
 
-            if (teacherConflict) {
-              const conflictTeacher = teachers.find(t => t._id === teacherConflict.teacherId);
-              toast.error(
-                `⚠️ Teacher "${conflictTeacher?.name || teacherConflict.teacherName}" is already assigned to ${teacherConflict.className} at this time on ${sanitizedEntry.day}.\n\n` +
-                `This class already has this teacher in this period.\n` +
-                `To add multiple subjects to the same class at the same time, use a different teacher.`
-              );
+            const apiId = existingEntry?._id || existingEntry?.id || sanitizedEntry._id || sanitizedEntry.id;
+
+            if (!apiId) {
+              toast.error("Invalid entry ID");
               setIsSaving(false);
               return;
             }
 
-            const result = await syncToAPI("POST", `${API_BASE}/timetable`, apiData);
+            const result = await syncToAPI("PUT", `${API_BASE}/timetable/${apiId}`, apiData);
 
-            if (result?.success && result?.data) {
-              const savedData = result.data;
-              const savedEntry = {
-                ...sanitizedEntry,
-                id: savedData._id || savedData.id || `entry_${Date.now()}`,
-                _id: savedData._id || savedData.id,
-                ratePerPeriod: savedData.ratePerPeriod || sanitizedEntry.ratePerPeriod,
-              };
+            if (result?.success) {
+              workingEntries = workingEntries.map((e) => {
+                const isMatching =
+                  e.id === sanitizedEntry.id ||
+                  e._id === sanitizedEntry.id ||
+                  e.id === sanitizedEntry._id ||
+                  e._id === sanitizedEntry._id ||
+                  (e._id && sanitizedEntry._id && e._id.toString() === sanitizedEntry._id.toString());
 
-              workingEntries = [...workingEntries, savedEntry];
+                if (isMatching) {
+                  return {
+                    ...sanitizedEntry,
+                    _id: e._id || sanitizedEntry._id,
+                    id: e.id || sanitizedEntry.id
+                  };
+                }
+                return e;
+              });
+              editedAny = true;
             } else {
-              throw new Error(result?.message || "Failed to create entry");
+              throw new Error(result?.message || "Failed to update");
             }
-          } catch (error: any) {
-            if (error.message?.includes("already has a period") ||
-              error.message?.includes("already assigned")) {
-              toast.error(
-                `⚠️ ${error.message}\n\n` +
-                `This teacher already has a period at this time.\n` +
-                `To add multiple subjects to the same class at the same time,\n` +
-                `please use a different teacher for each subject.`
+          } else {
+            try {
+              // Only block a genuine duplicate: the SAME teacher assigned to the
+              // SAME class at the SAME time. A teacher may teach multiple
+              // classes in one slot (combined classes), and a class may hold
+              // multiple subjects in one slot as long as the teachers differ.
+              const teacherConflict = workingEntries.find((e) =>
+                e.teacherId === sanitizedEntry.teacherId &&
+                e.day === sanitizedEntry.day &&
+                e.startTime === sanitizedEntry.startTime &&
+                e.academicYear === sanitizedEntry.academicYear &&
+                e.id !== sanitizedEntry.id &&
+                e._id !== sanitizedEntry._id &&
+                // Same class check (by id when available, otherwise by name)
+                (
+                  (e.classId && sanitizedEntry.classId && e.classId === sanitizedEntry.classId) ||
+                  (e.className && sanitizedEntry.className && e.className === sanitizedEntry.className)
+                )
               );
-            } else {
-              throw error;
+
+              if (teacherConflict) {
+                const conflictTeacher = teachers.find(t => t._id === teacherConflict.teacherId);
+                toast.error(
+                  `⚠️ Teacher "${conflictTeacher?.name || teacherConflict.teacherName}" is already assigned to ${teacherConflict.className} at this time on ${sanitizedEntry.day}.\n\n` +
+                  `This class already has this teacher in this period.\n` +
+                  `To add multiple subjects to the same class at the same time, use a different teacher.`
+                );
+                setIsSaving(false);
+                return;
+              }
+
+              const result = await syncToAPI("POST", `${API_BASE}/timetable`, apiData);
+
+              if (result?.success && result?.data) {
+                const savedData = result.data;
+                const savedEntry = {
+                  ...sanitizedEntry,
+                  id: savedData._id || savedData.id || `entry_${Date.now()}`,
+                  _id: savedData._id || savedData.id,
+                  ratePerPeriod: savedData.ratePerPeriod || sanitizedEntry.ratePerPeriod,
+                };
+
+                workingEntries = [...workingEntries, savedEntry];
+              } else {
+                throw new Error(result?.message || "Failed to create entry");
+              }
+            } catch (error: any) {
+              if (error.message?.includes("already has a period") ||
+                error.message?.includes("already assigned")) {
+                toast.error(
+                  `⚠️ ${error.message}\n\n` +
+                  `This teacher already has a period at this time.\n` +
+                  `To add multiple subjects to the same class at the same time,\n` +
+                  `please use a different teacher for each subject.`
+                );
+              } else {
+                throw error;
+              }
+              setIsSaving(false);
+              return;
             }
-            setIsSaving(false);
-            return;
           }
         }
-      }
 
         setEntries(workingEntries);
         setStats(calculateStats(workingEntries));
@@ -1736,19 +1737,19 @@ export function TimetableAdminPage() {
 
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
-          <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #0b5321; padding-bottom: 8px;">
-            <h2 style="font-size: 18px; margin: 0; color: #0b5321; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
+          <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #155DAA; padding-bottom: 8px;">
+            <h2 style="font-size: 18px; margin: 0; color: #155DAA; font-weight: 800;">BCHS DOUALA</h2>
             <p style="font-size: 11px; color: #666; margin: 3px 0;">Timetable • ${academicYear}${filterLabel}</p>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
             <thead>
-              <tr style="background: #0b5321; color: white;">
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Period</th>
+              <tr style="background: #155DAA; color: white;">
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #155DAA; font-size: 10px; text-transform: uppercase; font-weight: 700;">Day</th>
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #155DAA; font-size: 10px; text-transform: uppercase; font-weight: 700;">Period</th>
                 ${uniqueClasses.map((c) => `
-                  <th style="padding: 6px 8px; text-align: center; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">${c.department ? `${c.className} ${c.department}` : c.className}</th>
+                  <th style="padding: 6px 8px; text-align: center; border: 1px solid #155DAA; font-size: 10px; text-transform: uppercase; font-weight: 700;">${c.department ? `${c.className} ${c.department}` : c.className}</th>
                 `).join('')}
-                <th style="padding: 6px 8px; text-align: left; border: 1px solid #0b5321; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
+                <th style="padding: 6px 8px; text-align: left; border: 1px solid #155DAA; font-size: 10px; text-transform: uppercase; font-weight: 700;">Time</th>
               </tr>
             </thead>
             <tbody>
@@ -1901,7 +1902,7 @@ export function TimetableAdminPage() {
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
           <div style="text-align: center; margin-bottom: 15px; border-bottom: 3px solid #000000; padding-bottom: 12px;">
-            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h1>
+            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">BCHS DOUALA</h1>
             <p style="font-size: 13px; color: #666; margin: 4px 0 0 0;">TIMETABLE • ${academicYear}</p>
             <p style="font-size: 12px; color: #888; margin: 2px 0 0 0;">Classes: ${classNames || 'All Classes'}</p>
           </div>
@@ -1969,7 +1970,7 @@ export function TimetableAdminPage() {
           <div style="text-align: center; margin-top: 12px; font-size: 9px; color: #000000; border-top: 1px solid #000000; padding-top: 10px;">
             <span>Generated: ${new Date().toLocaleString()}</span>
             <span style="margin: 0 15px;">|</span>
-            <span>MA NDUM FAVOURED EVENING SECONDARY SCHOOL</span>
+            <span>BCHS DOUALA</span>
             <span style="margin: 0 15px;">|</span>
             <span>Page 1 of 1</span>
           </div>
@@ -2079,7 +2080,7 @@ export function TimetableAdminPage() {
         container.innerHTML = `
           <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
             <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000; padding-bottom: 8px;">
-              <h2 style="font-size: 18px; margin: 0; color: #000; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
+              <h2 style="font-size: 18px; margin: 0; color: #000; font-weight: 800;">BCHS DOUALA</h2>
               <p style="font-size: 14px; font-weight: 700; color: #000; margin: 4px 0;">CLASS TIMETABLE: ${report.className}</p>
               <p style="font-size: 11px; color: #000; margin: 3px 0;">Academic Year ${academicYear}</p>
             </div>
@@ -2206,7 +2207,7 @@ export function TimetableAdminPage() {
         let htmlContent = `
           <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
             <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000000; padding-bottom: 8px;">
-              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">MA NDUM FAVOURED EVENING SECONDARY SCHOOL</h2>
+              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">BCHS DOUALA</h2>
               <p style="font-size: 11px; font-weight:bold; color: #000000; margin: 3px 0;">Timetable • ${academicYear}${filterLabel} • ${pageLabel}</p>
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
@@ -2407,144 +2408,84 @@ export function TimetableAdminPage() {
       )}
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-3xl font-extrabold tracking-tight flex items-center gap-3">
-            <Calendar className="size-8 text-brand" />
-            Timetable Management
-          </h1>
-          <p className="text-sm text-black/60 mt-1">
-            {entries.length} periods scheduled • {stats.totalTeachers} teachers • {stats.totalClasses} classes
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <select
-            value={filterClass}
-            onChange={(e) => {
-              setFilterClass(e.target.value);
-              setFilterTeacher("");
-            }}
-            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium min-w-[140px]"
-          >
-            <option value="">All Classes</option>
-            {uniqueClasses.map((c) => (
-              <option key={c._id} value={c._id}>
-                {c.department ? `${c.className} ${c.department}` : c.className}
-              </option>
-            ))}
-          </select>
+      <div className="rounded-2xl border border-stone-200 bg-white shadow-sm p-4 sm:p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h1 className="font-display text-3xl font-extrabold tracking-tight flex items-center gap-3">
+              <Calendar className="size-8 text-brand" />
+              Timetable Management
+            </h1>
+            <p className="text-sm text-black/60 mt-1">
+              {entries.length} periods scheduled • {stats.totalTeachers} teachers • {stats.totalClasses} classes
+            </p>
+          </div>
 
-          <select
-            value={filterTeacher}
-            onChange={(e) => {
-              setFilterTeacher(e.target.value);
-              setFilterClass("");
-            }}
-            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium min-w-[140px]"
-          >
-            <option value="">All Teachers</option>
-            {teachers.map((t) => (
-              <option key={t._id} value={t._id}>{t.name}</option>
-            ))}
-          </select>
+          <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-end">
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={filterClass}
+                onChange={(e) => {
+                  setFilterClass(e.target.value);
+                  setFilterTeacher("");
+                }}
+                className="px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium min-w-[150px] focus:outline-none focus:ring-2 focus:ring-brand/20"
+              >
+                <option value="">All Classes</option>
+                {uniqueClasses.map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.department ? `${c.className} ${c.department}` : c.className}
+                  </option>
+                ))}
+              </select>
 
-          <button
-            onClick={() => setShowBulkModal(true)}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all disabled:opacity-50"
-          >
-            <Upload className="size-4" /> Bulk Add
-          </button>
-          <button
-            onClick={() => setShowCopyModal(true)}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all disabled:opacity-50"
-          >
-            <Copy className="size-4" /> Copy Year
-          </button>
-          <button
-            onClick={() => setShowSetupWizard(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-amber-200 text-amber-700 text-sm font-semibold hover:bg-amber-50 transition-all"
-          >
-            <Calendar className="size-4" /> Auto-Generate
-          </button>
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all"
-          >
-            <Settings className="size-4" /> School Settings
-          </button>
-          <button
-            onClick={() => setShowSubjectsModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-brand/20 text-brand text-sm font-semibold hover:bg-brand/5 transition-all"
-          >
-            <BookOpen className="size-4" /> Subjects & Periods
-          </button>
-          <button
-            onClick={exportToCSV}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-stone-200 text-sm font-semibold hover:bg-stone-50 transition-all"
-          >
-            <FileSpreadsheet className="size-4" /> Export CSV
-          </button>
-          <button
-            onClick={exportToPDF}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-stone-200 text-sm font-semibold hover:bg-stone-50 transition-all"
-          >
-            <Printer className="size-4" /> Print
-          </button>
+              <select
+                value={filterTeacher}
+                onChange={(e) => {
+                  setFilterTeacher(e.target.value);
+                  setFilterClass("");
+                }}
+                className="px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium min-w-[150px] focus:outline-none focus:ring-2 focus:ring-brand/20"
+              >
+                <option value="">All Teachers</option>
+                {teachers.map((t) => (
+                  <option key={t._id} value={t._id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
 
-          <div className="relative group">
-            <button
-              onClick={downloadStandardPDF}
-              disabled={isDownloadingPdf}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition-all disabled:opacity-50 shadow-lg shadow-brand/20"
-            >
-              {isDownloadingPdf ? <span className="animate-spin"><Download className="size-4" /></span> : <Download className="size-4" />}
-              {isDownloadingPdf ? "Generating..." : "Download PDF"}
-            </button>
-            <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl border border-stone-200 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setShowSetupWizard(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm font-semibold hover:bg-amber-100 transition-all"
+              >
+                <Calendar className="size-4" /> Auto-Generate
+              </button>
+
+              <button
+                onClick={() => setShowAddModal(true)}
+                disabled={isSaving}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition-all shadow-sm disabled:opacity-50"
+              >
+                <Plus className="size-4" /> Add Period
+              </button>
+
+              <button
+                onClick={exportToPDF}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm font-semibold hover:bg-stone-50 transition-all"
+              >
+                <Printer className="size-4" /> Print
+              </button>
+
               <button
                 onClick={downloadStandardPDF}
                 disabled={isDownloadingPdf}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-t-xl flex items-center gap-2"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#121212] text-white text-sm font-semibold hover:bg-black transition-all disabled:opacity-50 shadow-sm"
               >
-                <FileSpreadsheet className="size-4" />
-                Standard Format (Day x Class)
-              </button>
-              <button
-                onClick={downloadMatrixPDF}
-                disabled={isDownloadingPdf}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 flex items-center gap-2"
-              >
-                <LayoutGrid className="size-4" />
-                Matrix Format (Time x Day)
-              </button>
-              <button
-                onClick={downloadPaginatedPDF}
-                disabled={isDownloadingPdf}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-b-xl flex items-center gap-2"
-              >
-                <CalendarDays className="size-4" />
-                Paginated (Mon-Wed / Thu-Fri)
-              </button>
-              <button
-                onClick={downloadClassReportsPDF}
-                disabled={isDownloadingPdf}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-50 rounded-b-xl flex items-center gap-2"
-              >
-                <FileSpreadsheet className="size-4" />
-                One Report Per Class
+                {isDownloadingPdf ? <span className="animate-spin"><Download className="size-4" /></span> : <Download className="size-4" />}
+                {isDownloadingPdf ? "Generating..." : "Download PDF"}
               </button>
             </div>
           </div>
-
-          <button
-            onClick={() => setShowAddModal(true)}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 transition-all shadow-lg shadow-brand/20 disabled:opacity-50"
-          >
-            <Plus className="size-4" /> Add Period
-          </button>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
-import { Wallet, AlertTriangle, MessageSquare, Download, Printer, Filter, Search, FileText } from "lucide-react";
+import { Wallet, AlertTriangle, MessageSquare, Download, Printer, Filter, Search, FileText, Plus, X } from "lucide-react";
+import { CompactPageLoader } from "@/components/CompactPageLoader";
 import { toast } from "sonner";
 import axios from "axios";
 import jsPDF from "jspdf";
@@ -21,6 +22,14 @@ interface Student {
   registrationDate: string;
   feesPaid: number;
   feesDue: number;
+  tuitionFee?: number;
+  tuitionInstallments?: number;
+  tuitionFeePaid?: number;
+  tuitionInstallmentsPaid?: number;
+  registrationFeeRequired?: boolean;
+  registrationFeeAmount?: number;
+  registrationFeePaid?: number;
+  feePayments?: Array<{ feeType: "tuition" | "registration"; amount: number; installmentNumber?: number; paidAt: string }>;
 }
 
 interface Class {
@@ -30,21 +39,34 @@ interface Class {
   cycle: string;
   acedemicYear: string;
   classMasterId: string;
+  tuitionFee: number;
+  tuitionInstallments: number;
+  registrationFeeRequired: boolean;
+  registrationFeeAmount: number;
 }
 
-// Helper function to get fee by class name
-function getFeeByClass(className: string): number {
-  const feeMap: { [key: string]: number } = {
-    "Form 1": 80000,
-    "Form 2": 80000,
-    "Form 3": 80000,
-    "Form 4": 80000,
-    "Form 5": 90000,
-    "Lower 6th": 100000,
-    "Upper 6th": 100000,
-    "Graduated": 0
+function getFeePlan(student: Student, schoolClass?: Class) {
+  const tuitionFee = Number(student.tuitionFee ?? schoolClass?.tuitionFee ?? 0);
+  const tuitionFeePaid = Number(student.tuitionFeePaid ?? student.feesPaid ?? 0);
+  const tuitionInstallments = Number(student.tuitionInstallments ?? schoolClass?.tuitionInstallments ?? 1);
+  const tuitionInstallmentsPaid = Number(student.tuitionInstallmentsPaid ?? 0);
+  const registrationFeeRequired = Boolean(student.registrationFeeRequired ?? schoolClass?.registrationFeeRequired);
+  const registrationFeeAmount = registrationFeeRequired
+    ? Number(student.registrationFeeAmount ?? schoolClass?.registrationFeeAmount ?? 0)
+    : 0;
+  const registrationFeePaid = Number(student.registrationFeePaid ?? 0);
+  return {
+    tuitionFee,
+    tuitionFeePaid,
+    tuitionInstallments,
+    tuitionInstallmentsPaid,
+    registrationFeeRequired,
+    registrationFeeAmount,
+    registrationFeePaid,
+    registrationDue: Math.max(0, registrationFeeAmount - registrationFeePaid),
+    tuitionDue: Math.max(0, tuitionFee - tuitionFeePaid),
+    totalFee: tuitionFee + registrationFeeAmount,
   };
-  return feeMap[className] || 80000;
 }
 
 export function FeesPage() {
@@ -54,32 +76,54 @@ export function FeesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [classFilter, setClassFilter] = useState<string>("all");
   const [feeFilter, setFeeFilter] = useState<string>("all");
+  const [payingStudent, setPayingStudent] = useState<Student | null>(null);
+  const [paymentType, setPaymentType] = useState<"tuition" | "registration">("tuition");
+  const [paymentAmount, setPaymentAmount] = useState(0);
+  const [savingPayment, setSavingPayment] = useState(false);
 
   // Fetch data
-  const fetchData = async () => {
+  const fetchStudents = async (selectedClassId: string) => {
     try {
-      setLoading(true);
-      const [studentsRes, classesRes] = await Promise.all([
-        axios.get(`${API_BASE}/students`),
-        axios.get(`${API_BASE}/classes`)
-      ]);
+      const endpoint = selectedClassId === "all"
+        ? `${API_BASE}/students`
+        : `${API_BASE}/students/class/${selectedClassId}`;
 
+      const studentsRes = await axios.get(endpoint);
       if (studentsRes.data.success) {
         const mappedStudents = studentsRes.data.data.map((student: any) => ({
           ...student,
           id: student._id || student.id
         }));
         setStudents(mappedStudents);
-        console.log("📚 Students loaded:", mappedStudents.length);
       }
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || "Failed to fetch students");
+      console.error("Error fetching students:", error);
+    }
+  };
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const classesRes = await axios.get(`${API_BASE}/classes`);
+
       if (classesRes.data.success) {
         const mappedClasses = classesRes.data.data.map((cls: any) => ({
           ...cls,
           id: cls._id || cls.id,
-          className: cls.className || cls.name
+          className: cls.className || cls.name,
+          tuitionFee: Number(cls.tuitionFee) || 0,
+          tuitionInstallments: Number(cls.tuitionInstallments) || 1,
+          registrationFeeRequired: Boolean(cls.registrationFeeRequired),
+          registrationFeeAmount: Number(cls.registrationFeeAmount) || 0,
         }));
         setClasses(mappedClasses);
-        console.log("📚 Classes loaded:", mappedClasses.length);
+
+        const nextClassId = classFilter === "all" && mappedClasses[0] ? mappedClasses[0].id : classFilter;
+        if (nextClassId !== classFilter) {
+          setClassFilter(nextClassId);
+        }
+        await fetchStudents(nextClassId);
       }
     } catch (error: any) {
       toast.error(error.response?.data?.message || "Failed to fetch data");
@@ -90,8 +134,17 @@ export function FeesPage() {
   };
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, []);
+
+  useEffect(() => {
+    if (!classes.length) return;
+    if (classFilter === "all") {
+      void fetchStudents("all");
+      return;
+    }
+    void fetchStudents(classFilter);
+  }, [classFilter, classes.length]);
 
   // Calculate statistics
   const stats = useMemo(() => {
@@ -103,7 +156,7 @@ export function FeesPage() {
     const fullyPaid = students.filter((s) => s.feesDue === 0);
     const partialPaid = students.filter((s) => {
       const classObj = classes.find(c => c.id === s.classId);
-      const totalFee = getFeeByClass(classObj?.className || "");
+      const totalFee = getFeePlan(s, classObj).totalFee;
       return s.feesDue > 0 && s.feesDue < totalFee;
     });
 
@@ -139,10 +192,66 @@ export function FeesPage() {
       // Fee status filter
       if (feeFilter === "debtors" && s.feesDue === 0) return false;
       if (feeFilter === "fully-paid" && s.feesDue > 0) return false;
-      if (feeFilter === "partial" && (s.feesDue === 0 || s.feesDue >= getFeeByClass(classes.find(c => c.id === s.classId)?.className || ""))) return false;
+      if (feeFilter === "partial" && (s.feesDue === 0 || s.feesDue >= getFeePlan(s, classes.find(c => c.id === s.classId)).totalFee)) return false;
       return true;
     });
   }, [students, searchTerm, classFilter, feeFilter, classes]);
+
+  const startPayment = (student: Student) => {
+    const schoolClass = classes.find((item) => item.id === student.classId);
+    const plan = getFeePlan(student, schoolClass);
+    if (plan.registrationDue > 0) {
+      setPaymentType("registration");
+      setPaymentAmount(plan.registrationDue);
+    } else if (plan.tuitionDue > 0) {
+      const installment = plan.tuitionInstallmentsPaid + 1;
+      const expected = installment >= plan.tuitionInstallments
+        ? plan.tuitionDue
+        : Math.min(plan.tuitionDue, Math.round((plan.tuitionFee / plan.tuitionInstallments) * 100) / 100);
+      setPaymentType("tuition");
+      setPaymentAmount(expected);
+    } else {
+      toast.success("This student has no remaining fees");
+      return;
+    }
+    setPayingStudent(student);
+  };
+
+  const changePaymentType = (nextType: "tuition" | "registration") => {
+    if (!payingStudent) return;
+    const plan = getFeePlan(payingStudent, classes.find((item) => item.id === payingStudent.classId));
+    if (nextType === "registration") {
+      setPaymentAmount(plan.registrationDue);
+    } else {
+      const installment = plan.tuitionInstallmentsPaid + 1;
+      setPaymentAmount(installment >= plan.tuitionInstallments
+        ? plan.tuitionDue
+        : Math.min(plan.tuitionDue, Math.round((plan.tuitionFee / plan.tuitionInstallments) * 100) / 100));
+    }
+    setPaymentType(nextType);
+  };
+
+  const recordFeePayment = async () => {
+    if (!payingStudent || paymentAmount <= 0) return;
+    const plan = getFeePlan(payingStudent, classes.find((item) => item.id === payingStudent.classId));
+    const installmentNumber = paymentType === "tuition" ? plan.tuitionInstallmentsPaid + 1 : undefined;
+    setSavingPayment(true);
+    try {
+      await axios.post(`${API_BASE}/students/${payingStudent.id}/pay-fees`, {
+        amount: paymentAmount,
+        feeType: paymentType,
+        installmentNumber,
+        recordedBy: "admin",
+      });
+      toast.success(paymentType === "registration" ? "Registration fee payment recorded" : `Tuition installment ${installmentNumber} recorded`);
+      setPayingStudent(null);
+      await fetchData();
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || "Could not record payment");
+    } finally {
+      setSavingPayment(false);
+    }
+  };
 
   // Export to PDF
   const exportPDF = () => {
@@ -303,7 +412,7 @@ export function FeesPage() {
 
     debtors.forEach((s, index) => {
       const classObj = classes.find(c => c.id === s.classId);
-      const totalFee = getFeeByClass(classObj?.className || "");
+      const totalFee = getFeePlan(s, classObj).totalFee;
       const status = s.feesDue === totalFee ? "Owing" : "Partial";
       const statusClass = status === "Owing" ? "status-owing" : "status-partial";
 
@@ -341,14 +450,7 @@ export function FeesPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-black/60">Loading fees data...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading fees data..." />;
   }
 
   return (
@@ -359,37 +461,37 @@ export function FeesPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-brand text-white p-5 rounded-2xl">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+        <div className="min-w-0 rounded-2xl bg-brand p-3 text-white sm:p-5">
           <Wallet className="size-5 mb-3 opacity-80" />
           <div className="text-[10px] uppercase tracking-widest font-bold opacity-80">Collected</div>
-          <div className="font-display text-2xl font-extrabold mt-1">{stats.totalPaid.toLocaleString()} XAF</div>
+          <div className="mt-1 break-words font-display text-lg font-extrabold sm:text-2xl">{stats.totalPaid.toLocaleString()} XAF</div>
           <div className="text-xs opacity-80 mt-1">{stats.fullyPaidCount} fully paid</div>
         </div>
 
-        <div className="bg-white border border-stone-200 p-5 rounded-2xl">
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white p-3 sm:p-5">
           <AlertTriangle className="size-5 mb-3 text-red-500" />
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/40">Outstanding</div>
-          <div className="font-display text-2xl font-extrabold mt-1 text-red-600">{stats.totalDue.toLocaleString()} XAF</div>
+          <div className="mt-1 break-words font-display text-lg font-extrabold text-red-600 sm:text-2xl">{stats.totalDue.toLocaleString()} XAF</div>
           <div className="text-xs text-black/50 mt-1">{stats.debtorsCount} students owe</div>
         </div>
 
-        <div className="bg-white border border-stone-200 p-5 rounded-2xl">
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white p-3 sm:p-5">
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/40">Collection Rate</div>
-          <div className="font-display text-2xl font-extrabold mt-1">{stats.collectionRate.toFixed(1)}%</div>
+          <div className="mt-1 break-words font-display text-lg font-extrabold sm:text-2xl">{stats.collectionRate.toFixed(1)}%</div>
           <div className="text-xs text-black/50 mt-1">{stats.totalStudents} total students</div>
         </div>
 
-        <div className="bg-white border border-stone-200 p-5 rounded-2xl">
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white p-3 sm:p-5">
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/40">Average Due</div>
-          <div className="font-display text-2xl font-extrabold mt-1">{stats.averageDue.toLocaleString()} XAF</div>
+          <div className="mt-1 break-words font-display text-lg font-extrabold sm:text-2xl">{stats.averageDue.toLocaleString()} XAF</div>
           <div className="text-xs text-black/50 mt-1">per student</div>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-2xl border border-stone-200 p-4 flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="grid min-w-0 gap-3 rounded-2xl border border-stone-200 bg-white p-3 sm:flex sm:flex-wrap sm:items-center sm:p-4">
+        <div className="relative min-w-0 w-full sm:flex-1 sm:basis-[200px]">
           <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-black/40" />
           <input
             value={searchTerm}
@@ -399,23 +501,23 @@ export function FeesPage() {
           />
         </div>
 
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
           <Filter className="size-4 text-black/40" />
           <select
             value={classFilter}
             onChange={(e) => setClassFilter(e.target.value)}
-            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium"
+            className="min-w-0 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-medium sm:w-auto sm:max-w-[220px]"
           >
             <option value="all">All classes</option>
             {classes.map((c) => <option key={c.id} value={c.id}>{c.className}</option>)}
           </select>
         </div>
 
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
           <select
             value={feeFilter}
             onChange={(e) => setFeeFilter(e.target.value)}
-            className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-sm font-medium"
+            className="min-w-0 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-medium sm:w-auto"
           >
             <option value="all">All Students</option>
             <option value="fully-paid">Fully Paid</option>
@@ -424,14 +526,14 @@ export function FeesPage() {
           </select>
         </div>
 
-        <div className="flex gap-2 ml-auto">
-          <button onClick={printDebtors} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700">
+        <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto">
+          <button onClick={printDebtors} className="col-span-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700 sm:col-span-1 sm:w-auto sm:px-4">
             <Printer className="size-4" /> Print Debtors
           </button>
-          <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm font-semibold hover:bg-stone-50">
+          <button onClick={exportCSV} className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50 sm:w-auto sm:px-4">
             <Download className="size-4" /> CSV
           </button>
-          <button onClick={exportPDF} className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-stone-200 bg-white text-sm font-semibold hover:bg-stone-50">
+          <button onClick={exportPDF} className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50 sm:w-auto sm:px-4">
             <FileText className="size-4" /> PDF
           </button>
         </div>
@@ -455,29 +557,33 @@ export function FeesPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[1080px] text-sm">
             <thead className="bg-stone-50 text-left text-[10px] uppercase tracking-widest text-black/50 font-bold">
               <tr>
                 <th className="px-5 py-3">Student</th>
                 <th className="px-5 py-3">Class</th>
                 <th className="px-5 py-3">Parent</th>
                 <th className="px-5 py-3">Phone</th>
+                <th className="px-5 py-3 text-right">Tuition Plan</th>
+                <th className="px-5 py-3 text-right">Registration Fee</th>
                 <th className="px-5 py-3 text-right">Fees Paid</th>
                 <th className="px-5 py-3 text-right">Fees Due</th>
                 <th className="px-5 py-3 text-center">Status</th>
+                <th className="px-5 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-black/40">
+                  <td colSpan={10} className="text-center py-12 text-black/40">
                     No students match your filters.
                   </td>
                 </tr>
               ) : (
                 filteredStudents.map((s) => {
                   const classObj = classes.find(c => c.id === s.classId);
-                  const totalFee = getFeeByClass(classObj?.className || "");
+                  const plan = getFeePlan(s, classObj);
+                  const totalFee = plan.totalFee;
                   let status = "Fully Paid";
                   let statusColor = "bg-green-100 text-green-700";
 
@@ -495,6 +601,18 @@ export function FeesPage() {
                       <td className="px-5 py-3">{classObj?.className || "—"}</td>
                       <td className="px-5 py-3 text-xs">{s.parentName}</td>
                       <td className="px-5 py-3 text-xs">{s.parentPhone}</td>
+                      <td className="px-5 py-3 text-right text-xs">
+                        <strong>{plan.tuitionFee.toLocaleString()} XAF</strong>
+                        <span className="block text-black/45">{plan.tuitionInstallmentsPaid}/{plan.tuitionInstallments} installments paid</span>
+                      </td>
+                      <td className="px-5 py-3 text-right text-xs">
+                        {plan.registrationFeeRequired ? (
+                          <>
+                            <strong>{plan.registrationFeeAmount.toLocaleString()} XAF</strong>
+                            <span className="block text-black/45">{plan.registrationFeePaid.toLocaleString()} paid</span>
+                          </>
+                        ) : <span className="text-black/40">Not required</span>}
+                      </td>
                       <td className="px-5 py-3 text-right font-medium text-green-600">
                         {s.feesPaid.toLocaleString()}
                       </td>
@@ -506,6 +624,16 @@ export function FeesPage() {
                           {status}
                         </span>
                       </td>
+                      <td className="px-5 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => startPayment(s)}
+                          disabled={s.feesDue <= 0}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-white hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Plus className="size-3.5" /> Record payment
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
@@ -514,6 +642,63 @@ export function FeesPage() {
           </table>
         </div>
       </div>
+
+      {payingStudent && (() => {
+        const plan = getFeePlan(payingStudent, classes.find((item) => item.id === payingStudent.classId));
+        const installmentNumber = plan.tuitionInstallmentsPaid + 1;
+        const expectedTuitionInstallment = installmentNumber >= plan.tuitionInstallments
+          ? plan.tuitionDue
+          : Math.min(plan.tuitionDue, Math.round((plan.tuitionFee / plan.tuitionInstallments) * 100) / 100);
+        return (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => setPayingStudent(null)}>
+            <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-lg font-bold">Record Fee Payment</h2>
+                  <p className="mt-1 text-sm text-black/55">{payingStudent.fullName} · {classes.find((item) => item.id === payingStudent.classId)?.className}</p>
+                </div>
+                <button type="button" onClick={() => setPayingStudent(null)} className="grid size-8 place-items-center rounded-lg text-black/45 hover:bg-stone-100" aria-label="Close payment dialog">
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-stone-50 p-3 text-xs">
+                <p>Tuition due <strong className="block text-sm">{plan.tuitionDue.toLocaleString()} XAF</strong></p>
+                <p>Registration due <strong className="block text-sm">{plan.registrationDue.toLocaleString()} XAF</strong></p>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <label className="block">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-black/50">Payment category</span>
+                  <select value={paymentType} onChange={(event) => changePaymentType(event.target.value as "tuition" | "registration")} className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm">
+                    {plan.tuitionDue > 0 && plan.registrationDue <= 0 && <option value="tuition">Tuition installment {installmentNumber} of {plan.tuitionInstallments}</option>}
+                    {plan.registrationDue > 0 && <option value="registration">Registration fee</option>}
+                  </select>
+                </label>
+
+                {paymentType === "tuition" ? (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm">
+                    Installment {installmentNumber} of {plan.tuitionInstallments}: <strong>{expectedTuitionInstallment.toLocaleString()} XAF</strong>
+                    <p className="mt-1 text-xs text-black/55">Tuition is split into equal installments; the final amount includes any rounding difference.</p>
+                  </div>
+                ) : (
+                  <label className="block">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-black/50">Registration payment (XAF)</span>
+                    <input type="number" min={1} max={plan.registrationDue} step={500} value={paymentAmount} onChange={(event) => setPaymentAmount(Math.max(0, Number(event.target.value) || 0))} className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm" />
+                  </label>
+                )}
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" onClick={() => setPayingStudent(null)} className="rounded-lg border border-stone-200 px-4 py-2 text-sm font-semibold hover:bg-stone-50">Cancel</button>
+                <button type="button" onClick={recordFeePayment} disabled={savingPayment || paymentAmount <= 0} className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90 disabled:opacity-50">
+                  {savingPayment ? "Saving..." : "Confirm Payment"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

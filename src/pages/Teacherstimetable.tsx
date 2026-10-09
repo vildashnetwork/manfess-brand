@@ -6,6 +6,8 @@ import {
   Sun, Moon, Settings, Bell, Award, DollarSign, Download, Printer,
   ChevronDown, ChevronUp, FileDown, LayoutGrid, RefreshCw
 } from "lucide-react";
+import { CompactPageLoader } from "@/components/CompactPageLoader";
+import { getStoredSchoolSection } from "@/lib/schoolSystem";
 import { toast } from "sonner";
 import axios from "axios";
 
@@ -308,6 +310,68 @@ function buildMatrixTimetable(entries: TimetableEntry[], settings: SchoolSetting
   return { matrix, days, timeSlots };
 }
 
+// A-Level classes (Lower/Upper Sixth, "U6", "L6", "A Level", etc.) are printed
+// simply as "Alevel" on the paper timetable instead of the full class name.
+const A_LEVEL_PATTERN = /\b(upper sixth|lower sixth|u\.?6|l\.?6|a[\s-]?level|sixth form)\b/i;
+
+function toPrintClassLabel(className: string): string {
+  return A_LEVEL_PATTERN.test(className || '') ? 'Alevel' : className;
+}
+
+// Strip the department suffix: "Olevel 4 (Arts)" -> "Olevel 4",
+// "Olevel 4 Arts" -> "Olevel 4", "Alevel (Science)" -> "Alevel".
+// Used to collapse joint classes. Case/spacing tolerant so entries stored
+// with slightly different formats still collapse to one label.
+function baseClassLabel(className: string): string {
+  const raw = (className || '').trim();
+  if (/a\s*-?\s*level/i.test(raw)) return 'Alevel';
+  const olevel = raw.match(/o\s*-?\s*level\s*(\d+)/i);
+  if (olevel) return `Olevel ${olevel[1]}`;
+  const beginners = raw.match(/beginers?\s*(\d+)?/i);
+  if (beginners) return beginners[1] ? `Beginers${beginners[1]}` : 'Beginers';
+  const collapsed = toPrintClassLabel(raw);
+  return collapsed.replace(/\s*\([^)]*\)\s*$/, '').trim() || collapsed;
+}
+
+interface MergedCellGroup {
+  key: string;
+  subject: string;
+  teacher: string;
+  classText: string;
+  room: string;
+}
+
+// A general subject taught jointly to several departments of the same level
+// (e.g. Commerce to Olevel 4 Arts + Commercial + Science at the same time)
+// is stored as one entry per class. Merge those into a single display row so
+// the timetable shows the subject once with just "Olevel 4" instead of
+// repeating every department. Entries with different subjects (or different
+// teachers) in the same slot are kept separate.
+function mergeCellGroups(cellEntries: TimetableEntry[]): MergedCellGroup[] {
+  const map = new Map<string, TimetableEntry[]>();
+  cellEntries.forEach((e) => {
+    // Normalise so "Commerce" vs "commerce " (or teacher name casing) still merges.
+    const key = `${(e.subjectName || '').trim().toLowerCase()}||${(e.teacherName || '').trim().toLowerCase()}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(e);
+  });
+  return Array.from(map.entries()).map(([key, list]) => {
+    const names = Array.from(new Set(list.map((e) => e.className).filter(Boolean)));
+    const bases = Array.from(new Set(names.map(baseClassLabel)));
+    const classText = names.length > 1 && bases.length === 1
+      ? bases[0]
+      : names.join(', ');
+    const rooms = Array.from(new Set(list.map((e) => e.room).filter(Boolean)));
+    return {
+      key,
+      subject: list[0].subjectName,
+      teacher: list[0].teacherName,
+      classText: classText || '-',
+      room: rooms.join(', '),
+    };
+  });
+}
+
 // ============================================
 // TEACHER TIMETABLE VIEW
 // ============================================
@@ -328,6 +392,12 @@ export function TeacherTimetableView() {
   const [showPdfOptions, setShowPdfOptions] = useState(false);
   const hasFetched = useRef(false);
   const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
+  const [availabilityForm, setAvailabilityForm] = useState<{ isPermanent: boolean; availableDays: string[] }>({
+    isPermanent: true,
+    availableDays: [...DAYS],
+  });
+  const [availabilitySaved, setAvailabilitySaved] = useState(false);
+  const [isSavingAvailability, setIsSavingAvailability] = useState(false);
 
   // Days from the Auto-Generate wizard (Step 2), kept in Monday → Saturday order.
   const schoolDays = orderSchoolDays(schoolSettings.schoolDays);
@@ -348,11 +418,88 @@ export function TeacherTimetableView() {
 
   const [user] = useState(() => getLoggedInUser());
 
+  const hydrateTeacherAvailability = useCallback(async () => {
+    if (!user) return;
+
+    const teacherId = user.id || user._id;
+    if (!teacherId) return;
+
+    try {
+      const res = await axios.get(`${API_BASE}/users/${teacherId}`);
+      const loadedUser = res.data?.data || {};
+      const hasSavedConfig =
+        !!loadedUser.isPermanent ||
+        (Array.isArray(loadedUser.availableDays) && loadedUser.availableDays.length > 0);
+      const availableDays: string[] = Array.isArray(loadedUser.availableDays)
+        ? loadedUser.availableDays.filter((day: unknown): day is string => typeof day === 'string')
+        : [...DAYS];
+
+      const nextForm = {
+        isPermanent: !!loadedUser.isPermanent,
+        availableDays: [...new Set(availableDays.filter(Boolean))],
+      };
+
+      setAvailabilityForm(nextForm);
+      setAvailabilitySaved(hasSavedConfig);
+    } catch (error) {
+      console.warn('Could not load teacher availability:', error);
+      setAvailabilityForm({ isPermanent: true, availableDays: [...DAYS] });
+      setAvailabilitySaved(false);
+    }
+  }, [user]);
+
+  const handleToggleDay = (day: string) => {
+    if (availabilitySaved) return;
+    setAvailabilityForm((prev: { isPermanent: boolean; availableDays: string[] }): { isPermanent: boolean; availableDays: string[] } => {
+      const nextDays: string[] = prev.availableDays.includes(day)
+        ? prev.availableDays.filter((item) => item !== day)
+        : [...prev.availableDays, day];
+      return { ...prev, availableDays: nextDays };
+    });
+  };
+
+  const handleAvailabilitySubmit = async () => {
+    if (!user) {
+      toast.error('Please log in to submit your availability');
+      return;
+    }
+
+    const teacherId = user.id || user._id;
+    if (!teacherId) {
+      toast.error('Teacher ID not found');
+      return;
+    }
+
+    if (!availabilityForm.isPermanent && availabilityForm.availableDays.length === 0) {
+      toast.error('Please choose at least one available day');
+      return;
+    }
+
+    try {
+      setIsSavingAvailability(true);
+      const payload = {
+        isPermanent: availabilityForm.isPermanent,
+        availableDays: availabilityForm.isPermanent ? [...DAYS] : [...availabilityForm.availableDays],
+      };
+
+      await axios.patch(`${API_BASE}/users/${teacherId}`, payload);
+      setAvailabilitySaved(true);
+      toast.success('Your availability has been saved. Only the admin can edit it from the timetable dashboard.');
+    } catch (error: any) {
+      console.error('Failed to save availability:', error);
+      toast.error(error?.response?.data?.message || 'Failed to save your availability');
+    } finally {
+      setIsSavingAvailability(false);
+    }
+  };
+
   // ============================================
   // GENERATE MOCK DATA
   // ============================================
 
   const generateMockData = (userData?: any, settings: SchoolSettings = schoolSettings) => {
+    const mockClasses = CLASSES;
+    const mockSubjects = SUBJECTS;
     const mockTeacher: Teacher = {
       id: 't1',
       name: userData?.name || 'John Doe',
@@ -372,11 +519,11 @@ export function TeacherTimetableView() {
       periodSlots.forEach((timeSlot, pi) => {
         if (Math.random() > 0.35) {
           const cycle = pi % 2 === 0 ? 'first' : 'second';
-          const classIdx = (di + pi * 2) % CLASSES.length;
-          const subjectIdx = (di + pi * 3) % SUBJECTS.length;
+          const classIdx = (di + pi * 2) % mockClasses.length;
+          const subjectIdx = (di + pi * 3) % mockSubjects.length;
 
-          const cls = CLASSES[classIdx];
-          const subj = SUBJECTS[subjectIdx];
+          const cls = mockClasses[classIdx];
+          const subj = mockSubjects[subjectIdx];
 
           mockEntries.push({
             id: `mock_${di}_${pi}_${Date.now()}`,
@@ -575,6 +722,9 @@ export function TeacherTimetableView() {
 
     try {
       const { matrix, days, timeSlots } = buildMatrixTimetable(timetableData.timetable, schoolSettings);
+      // MANFESS has no break period in its schedule — only real periods are rendered as rows.
+      const periodSlots = timeSlots.filter(slot => !slot.isBreak);
+      const { teacher, stats } = timetableData;
 
       // Create a new window for printing
       const printWindow = window.open('', '_blank', 'width=1200,height=800');
@@ -584,33 +734,32 @@ export function TeacherTimetableView() {
         return;
       }
 
-      const classNames = Array.from(new Set(timetableData.timetable.map(e => e.className))).join(', ');
+      const teachingDaysLabel = days.length ? `${days[0]} – ${days[days.length - 1]}` : '';
 
       let htmlContent = `
 <!DOCTYPE html>
 <html>
 <head>
-<title>Timetable - ${timetableData.teacher.name}</title>
+<title>Teacher Timetable - ${teacher.name}</title>
 <style>
-  body { font-family: Arial, sans-serif; padding: 20px; background: white; }
-  .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; }
-  .header { text-align: center; margin-bottom: 20px; border-bottom: 3px solid #000; padding-bottom: 15px; }
-  .header h1 { font-size: 22px; margin: 0; color: #000; font-weight: 800; letter-spacing: 2px; }
-  .header p { font-size: 14px; color: #000; margin: 5px 0 0 0; font-weight: 600; }
-  .header .sub { font-size: 12px; color: #000; margin: 2px 0 0 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; border: 2px solid #000; }
-  th { padding: 12px 10px; text-align: center; border: 1px solid #000; font-size: 12px; font-weight: 700; background: #000; color: white; }
-  td { padding: 8px 6px; text-align: center; border: 1px solid #000; vertical-align: middle; }
-  .break-row { background: #fef3c7; }
-  .break-label { color: #b45309; font-weight: 700; font-size: 12px; }
-  .empty-cell { color: #000000; }
-  .entry-cell { padding: 4px 0; border-bottom: 1px solid #000000; }
-  .entry-cell:last-child { border-bottom: none; }
-  .subject { font-weight: 600; font-size: 11px; color: #1a1a1a; }
-  .teacher { font-size: 9px; color: #000; font-weight: 500; }
-  .room { font-size: 8px; color: #000000; }
-  .class-name { font-size: 8px; color: #000000; }
-  .footer { text-align: center; margin-top: 15px; font-size: 9px; color: #000; border-top: 1px solid #000; padding-top: 10px; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; padding: 24px; background: white; color: #000; }
+  .sheet { max-width: 1100px; margin: 0 auto; }
+  .school-header { text-align: center; border-bottom: 3px solid #000; padding-bottom: 8px; margin-bottom: 0; }
+  .school-header h1 { font-size: 22px; letter-spacing: 2px; margin: 0; font-weight: 800; }
+  .school-header p { font-size: 11px; margin: 3px 0 0 0; }
+  .title-bar { text-align: center; border: 2px solid #000; border-top: none; padding: 6px; font-weight: 700; font-size: 14px; letter-spacing: 1px; }
+  .info-row { display: flex; flex-wrap: wrap; border-left: 2px solid #000; border-right: 2px solid #000; padding: 5px 12px; font-size: 12px; gap: 24px; }
+  .info-row.last { border-bottom: 2px solid #000; }
+  .info-row .fill { border-bottom: 1px solid #000; padding: 0 6px; display: inline-block; min-width: 90px; }
+  table.grid { width: 100%; border-collapse: collapse; border: 2px solid #000; font-size: 11px; }
+  table.grid th, table.grid td { border: 1px solid #000; padding: 5px 6px; text-align: center; }
+  table.grid thead th { background: #f2f2f2; font-weight: 700; font-size: 11px; }
+  .period-col { width: 92px; font-weight: 700; background: #fafafa; white-space: nowrap; }
+  .empty-cell { color: #999; }
+  .signatures { display: flex; justify-content: space-between; margin-top: 55px; padding: 0 30px; font-size: 12px; }
+  .signature-line { display: inline-block; width: 220px; border-top: 1px solid #000; margin-top: 45px; text-align: center; padding-top: 4px; font-weight: 600; }
+  .footer-note { text-align: right; font-size: 9px; color: #666; margin-top: 12px; }
   @media print {
     body { padding: 0; }
     .no-print { display: none; }
@@ -618,93 +767,89 @@ export function TeacherTimetableView() {
 </style>
 </head>
 <body>
-<div class="container">
+<div class="sheet">
 `;
 
       if (pdfOptions.includeHeader) {
         htmlContent += `
-<div class="header">
-  <h1>MA NDUM FAVOURED EVEN SECONDARY SCHOOL (MANFESS)</h1>
-  <p>TEACHER TIMETABLE</p>
-  <p class="sub">${timetableData.teacher.name}</p>
-  <p class="sub">${classNames || 'All Classes'}</p>
+<div class="school-header">
+  <h1>BCHS DOUALA</h1>
+  <p>MOTTO: EDUCATION IS LIGHT</p>
+  <p>TEL: +237 677517606 &nbsp;&nbsp;|&nbsp;&nbsp;
+   AUT. N°: TECH - 035/24/MINESEC/SG/DESTP/SDSPETP/SSEPTP/07/FEB/2024
+   <br>
+  AUT.Nº:  GEN- 430/23/MINESEC/SG/DESG/SDSGEPESG/SSGEPES/27/SEPT/2023</p>
 </div>
 `;
       }
 
       htmlContent += `
-<table>
+<div class="title-bar">TEACHER'S TIME TABLE &nbsp; ACADEMIC YEAR: ${ACADEMIC_YEAR}</div>
+<div class="info-row">
+  <span>TEACHER'S NAME: <span class="fill">${teacher.name}</span></span>
+  <span>HIGHEST QUALIFICATION: <span class="fill">${teacher.qualification || '&nbsp;'}</span></span>
+</div>
+<div class="info-row">
+  <span>FULL-TIME OR PART-TIME: <span class="fill">&nbsp;</span></span>
+  <span>N° OF PERIODS: <span class="fill">${stats.totalPeriods}</span></span>
+  <span>SECTION: <span class="fill">&nbsp;</span></span>
+  <span>SPECIALTY: <span class="fill">&nbsp;</span></span>
+  <span>TEL: <span class="fill">&nbsp;</span></span>
+</div>
+<div class="info-row last">
+  <span>TEACHING DAYS IN SCHOOL: <span class="fill">${teachingDaysLabel}</span></span>
+</div>
+
+<table class="grid">
   <thead>
     <tr>
-      <th style="font-weight:bold; color:#fff;">TIME</th>
-      ${days.map(day => `<th style="font-weight:bold; color:#fff;">${day}</th>`).join('')}
+      <th class="period-col" rowspan="2">Periods</th>
+      ${days.map(day => `<th colspan="2">${day}</th>`).join('')}
+    </tr>
+    <tr>
+      ${days.map(() => `<th>Subject</th><th>Class</th>`).join('')}
     </tr>
   </thead>
   <tbody>
 `;
 
-      timeSlots.forEach((slot, idx) => {
-        const isBreak = slot.isBreak;
-        const rowClass = isBreak ? 'break-row' : '';
+      periodSlots.forEach(slot => {
         const key = `${slot.start}|${slot.end}`;
-
         htmlContent += `
-    <tr class="${rowClass}">
-      <td class="${isBreak ? 'break-label' : ''}">
-        <div style="font-size:14px;font-weight:800;">${slot.label}</div>
-        ${!isBreak ? `<div style="font-size:10px;font-weight:400;color:#000000;">${slot.start} - ${slot.end}</div>` : '<div style="font-size:10px;font-weight:600;color:#b45309;">BREAK</div>'}
-      </td>
+    <tr>
+      <td class="period-col">${slot.start}-${slot.end}</td>
 `;
-
         days.forEach(day => {
           const cell = matrix[day]?.[key];
+          const cellEntries = cell?.entries || [];
 
-          if (!cell || cell.entries.length === 0) {
-            htmlContent += `
-      <td><span class="empty-cell">-</span></td>
-`;
-            return;
-          }
+          // A general subject taught jointly to several departments of the same
+          // level (e.g. Commerce to Olevel 4 Arts + Commercial + Science at the
+          // same time) is stored as one entry per class. Merge those so the
+          // subject prints once with just "Olevel 4" instead of repeating.
+          const cellGroups = mergeCellGroups(cellEntries);
 
-          if (isBreak) {
-            htmlContent += `
-      <td style="background:#fef3c7;color:#000000;font-weight:700;font-size:11px;letter-spacing:1px;">BREAK</td>
-`;
-            return;
-          }
+          const subjectText = cellGroups.length
+            ? cellGroups.map((g) => g.subject).join('<br/>')
+            : '<span class="empty-cell">-</span>';
+          const classText = cellGroups.length
+            ? cellGroups.map((g) => g.classText).join('<br/>')
+            : '<span class="empty-cell">-</span>';
 
-          const entriesHtml = cell.entries.map((entry: TimetableEntry) => {
-            return `
-        <div class="entry-cell">
-          <div class="subject">${entry.subjectName}</div>
-         <div class="class-name" style="color: #000000; font-weight:bold;">${entry.className}</div>
-        </div>
-`;
-          }).join('');
-
-          htmlContent += `
-      <td>${entriesHtml}</td>
-`;
+          htmlContent += `      <td>${subjectText}</td><td>${classText}</td>\n`;
         });
-
-        htmlContent += `
-    </tr>
-`;
+        htmlContent += `    </tr>\n`;
       });
 
       htmlContent += `
   </tbody>
 </table>
 
-<div class="footer">
-  <span>Generated: ${new Date().toLocaleString()}</span>
-  <span style="margin:0 15px;">|</span>
-  <span>MA NDUM FAVOURED EVEN SECONDARY SCHOOL (MANFESS)</span>
-  <span style="margin:0 15px;">|</span>
-  <span>Page 1 of 1</span>
-  <span style="margin:0 15px;">|</span>
-  <span style="font-weight:600;">${timetableData.teacher.name}</span>
+<div class="signatures">
+  <div class="signature-line">VICE PRINCIPAL</div>
+  <div class="signature-line">PRINCIPAL</div>
 </div>
+<div class="footer-note">Generated: ${new Date().toLocaleString()}</div>
 </div>
 
 <script>
@@ -763,25 +908,19 @@ export function TeacherTimetableView() {
         // No saved settings yet — keep defaults (same as the backend generator's assumption).
       }
       if (!cancelled) {
+        hydrateTeacherAvailability();
         fetchTeacherTimetable(active);
       }
     })();
     return () => { cancelled = true; };
-  }, [fetchTeacherTimetable]);
+  }, [fetchTeacherTimetable, hydrateTeacherAvailability]);
 
   // ============================================
   // RENDER FUNCTIONS
   // ============================================
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px] sm:min-h-[500px]">
-        <div className="text-center px-4">
-          <div className="w-12 h-12 sm:w-16 sm:h-16 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-3 sm:mt-4 text-sm sm:text-base text-black/60 font-medium">Loading your timetable...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading your timetable..." />;
   }
 
   if (error && !timetableData) {
@@ -941,6 +1080,75 @@ export function TeacherTimetableView() {
           <span className="flex items-center gap-1"><BookOpen className="size-3 sm:size-4" /> {stats.totalPeriods} periods</span>
           <span className="flex items-center gap-1 text-brand"><DollarSign className="size-3 sm:size-4" /> {stats.totalPotentialEarnings.toLocaleString()} FRS</span>
         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-black/50">Availability submission</p>
+            <h3 className="mt-1 text-base sm:text-lg font-semibold text-stone-900">Your teaching availability</h3>
+          </div>
+          <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] sm:text-xs font-semibold ${availabilitySaved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+            {availabilitySaved ? 'Submitted' : 'Not submitted'}
+          </span>
+        </div>
+
+        {!availabilitySaved ? (
+          <div className="mt-4 space-y-4">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={availabilityForm.isPermanent}
+                onChange={(e) => setAvailabilityForm((prev) => ({ ...prev, isPermanent: e.target.checked, availableDays: e.target.checked ? [...DAYS] : prev.availableDays.length ? prev.availableDays : [...DAYS].slice(0, 5) }))}
+                className="h-4 w-4 rounded border-stone-300 text-brand focus:ring-brand"
+              />
+              <span className="text-sm font-medium text-stone-700">Permanent — available all days</span>
+            </label>
+
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-black/45">Available days</p>
+              <div className="flex flex-wrap gap-2">
+                {DAYS.map((day) => {
+                  const isSelected = availabilityForm.isPermanent || availabilityForm.availableDays.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => !availabilityForm.isPermanent && handleToggleDay(day)}
+                      disabled={availabilityForm.isPermanent}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${isSelected ? 'bg-brand text-white' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'} ${availabilityForm.isPermanent ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'}`}
+                    >
+                      {day.substring(0, 3)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleAvailabilitySubmit}
+                disabled={isSavingAvailability}
+                className="px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isSavingAvailability ? 'Saving...' : 'Submit availability'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <p className="font-semibold">Your availability has already been submitted.</p>
+            <p className="mt-1 text-emerald-700">
+              {availabilityForm.isPermanent
+                ? 'You are available all days.'
+                : `Available days: ${availabilityForm.availableDays.join(', ') || 'none'}`}
+            </p>
+            <p className="mt-2 text-xs text-emerald-700">
+              Only the admin can edit this from the timetable dashboard modal.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Stats Cards */}
@@ -1385,12 +1593,12 @@ function MatrixView({ entries, teacherName, settings }: { entries: TimetableEntr
 
                       return (
                         <td key={`${day}-${key}`} className="px-1 sm:px-2 py-1 sm:py-1.5 text-center border border-black" style={{ verticalAlign: 'top' }}>
-                          {cell.entries.map((entry: TimetableEntry) => (
-                            <div key={entry.id} className="mb-1 last:mb-0 p-1 rounded bg-white/80 border border-stone-200">
-                              <div className="font-semibold text-xs sm:text-sm">{entry.subjectName}</div>
-                              <div className="text-[8px] sm:text-[10px] text-black/60">{entry.teacherName}</div>
-                              <div className="text-[8px] sm:text-[10px] text-black/40">{entry.className}</div>
-                              {entry.room && <div className="text-[8px] sm:text-[10px] text-black/40">Room: {entry.room}</div>}
+                          {mergeCellGroups(cell.entries).map((g) => (
+                            <div key={g.key} className="mb-1 last:mb-0 p-1 rounded bg-white/80 border border-stone-200">
+                              <div className="font-semibold text-xs sm:text-sm">{g.subject}</div>
+                              <div className="text-[8px] sm:text-[10px] text-black/60">{g.teacher}</div>
+                              <div className="text-[8px] sm:text-[10px] text-black/40">{g.classText}</div>
+                              {g.room && <div className="text-[8px] sm:text-[10px] text-black/40">Room: {g.room}</div>}
                             </div>
                           ))}
                         </td>

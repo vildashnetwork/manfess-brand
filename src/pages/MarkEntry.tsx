@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Save, Wand2, Copy, Sparkles, Pencil, Loader2, CheckCircle, AlertCircle, CloudOff, Search, X } from "lucide-react";
+import { CompactPageLoader } from "@/components/CompactPageLoader";
 import { toast } from "sonner";
 import axios from "axios";
 import { currentUser } from "@/lib/auth";
@@ -96,6 +97,7 @@ export function MarkEntry() {
   const [classes, setClasses] = useState<Class[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [loading, setLoading] = useState(true);
+  const [classDataLoading, setClassDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teacher, setTeacher] = useState<Teacher | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -148,20 +150,10 @@ export function MarkEntry() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [studentsRes, subjectsRes, classesRes, marksRes] = await Promise.all([
-        axios.get(`${API_BASE}/students`),
+      const [subjectsRes, classesRes] = await Promise.all([
         axios.get(`${API_BASE}/subjects`),
         axios.get(`${API_BASE}/classes`),
-        axios.get(`${API_BASE}/marks`)
       ]);
-
-      if (studentsRes.data.success) {
-        const mappedStudents = studentsRes.data.data.map((s: any) => ({
-          ...s,
-          id: s._id || s.id
-        }));
-        setStudents(mappedStudents);
-      }
 
       if (subjectsRes.data.success) {
         const mappedSubjects = subjectsRes.data.data.map((s: any) => ({
@@ -181,14 +173,6 @@ export function MarkEntry() {
         setClasses(mappedClasses);
       }
 
-      if (marksRes.data.success) {
-        const mappedMarks = marksRes.data.data.map((m: any) => ({
-          ...m,
-          id: m._id || m.id,
-          academicyear: m.academicyear || m.academicYear || ""
-        }));
-        setMarks(mappedMarks);
-      }
     } catch (error: any) {
       console.error("Error fetching data:", error);
       toast.error(error.response?.data?.message || "Failed to fetch data");
@@ -245,6 +229,50 @@ export function MarkEntry() {
       setClassId(allowedClasses[0].id);
     }
   }, [allowedClasses, classId]);
+
+  useEffect(() => {
+    if (!classId) {
+      setStudents([]);
+      setMarks([]);
+      setClassDataLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setClassDataLoading(true);
+    Promise.all([
+      axios.get(`${API_BASE}/students/class/${classId}`),
+      axios.get(`${API_BASE}/marks`, { params: { classId } }),
+    ]).then(([studentsRes, marksRes]) => {
+      if (cancelled) return;
+      if (studentsRes.data.success) {
+        setStudents(studentsRes.data.data.map((student: any) => ({
+          ...student,
+          id: String(student._id || student.id),
+          classId: String(student.classId),
+        })));
+      }
+      if (marksRes.data.success) {
+        setMarks(marksRes.data.data.map((mark: any) => ({
+          ...mark,
+          id: mark._id || mark.id,
+          studentId: String(mark.studentId),
+          subjectId: String(mark.subjectId),
+          classId: String(mark.classId),
+          academicyear: mark.academicyear || mark.academicYear || "",
+        })));
+      }
+    }).catch((error: any) => {
+      if (!cancelled) {
+        console.error("Error fetching selected class marks:", error);
+        toast.error(error.response?.data?.message || "Failed to fetch marks for this class");
+      }
+    }).finally(() => {
+      if (!cancelled) setClassDataLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [classId]);
 
   useEffect(() => {
     if (allowedSubjects.length > 0 && !subjectId) {
@@ -454,11 +482,14 @@ export function MarkEntry() {
         localStorage.setItem(MARKS_STORAGE_KEY, JSON.stringify(savedDrafts));
 
         // Refresh marks
-        const marksRes = await axios.get(`${API_BASE}/marks`);
+        const marksRes = await axios.get(`${API_BASE}/marks`, { params: { classId } });
         if (marksRes.data.success) {
           const mappedMarks = marksRes.data.data.map((m: any) => ({
             ...m,
-            id: m._id || m.id
+            id: m._id || m.id,
+            studentId: String(m.studentId),
+            subjectId: String(m.subjectId),
+            classId: String(m.classId),
           }));
           setMarks(mappedMarks);
         }
@@ -536,14 +567,7 @@ export function MarkEntry() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-black/60">Loading data...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading marks and classes..." />;
   }
 
   if (isTeacher && allowedClasses.length === 0) {
@@ -748,7 +772,7 @@ export function MarkEntry() {
               {classStudents.length === 0 && (
                 <tr>
                   <td colSpan={5} className="text-center py-8 sm:py-12 text-black/40 text-xs sm:text-sm">
-                    {searchTerm ? `No students found matching "${searchTerm}"` : "No students in this class."}
+                    {classDataLoading ? "Loading this class's students and marks..." : searchTerm ? `No students found matching "${searchTerm}"` : "No students in this class."}
                   </td>
                 </tr>
               )}

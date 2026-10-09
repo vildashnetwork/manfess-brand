@@ -9,7 +9,7 @@ export function Landing() {
     if (user) {
       window.location.href = "/app/mark-entry"
     }
-  },[ user])
+  }, [user])
 
   return (
     <div className="min-h-screen bg-white font-sans text-[#121212]">
@@ -18,7 +18,7 @@ export function Landing() {
           <div className="size-10 bg-brand rounded-lg flex items-center justify-center">
             <GraduationCap className="size-5 text-white" />
           </div>
-          <span className="font-display text-xl font-bold tracking-tight uppercase">MAMS</span>
+          <span className="font-display text-xl font-bold tracking-tight uppercase">BCHS DOUALA</span>
         </Link>
         <Link to="/login" className="bg-brand text-white px-5 py-2.5 rounded-full font-semibold hover:bg-brand/90 transition-colors">Sign In</Link>
       </nav>
@@ -27,7 +27,7 @@ export function Landing() {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 bg-brand/10 text-brand rounded-full text-xs font-bold uppercase tracking-wider mb-6">
             <span className="size-2 bg-brand rounded-full animate-pulse" />
-            MANFESS Evening School · ERP
+            BCHS DOUALA · SCHOOL MANAGEMENT
           </div>
           <h1 className="font-display text-5xl lg:text-7xl font-extrabold leading-[1.05] mb-6 tracking-tight">
             Smart Management for <span className="text-brand">Cameroonian</span> Schools.
@@ -73,8 +73,8 @@ export function Landing() {
 
       <footer className="bg-[#121212] text-white/40 py-10">
         <div className="max-w-7xl mx-auto px-8 flex justify-between items-center">
-          <span className="text-white font-display font-bold tracking-tight uppercase">MAMS</span>
-          <p className="text-sm">© 2026 MANFESS Evening School</p>
+          <span className="text-white font-display font-bold tracking-tight uppercase">BCHS DOUALA</span>
+          <p className="text-sm">© 2026 BCHS DOUALA</p>
         </div>
       </footer>
     </div>

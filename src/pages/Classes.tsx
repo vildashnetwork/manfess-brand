@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Pencil, Trash2, BookOpen, Search, X } from "lucide-react";
+import { CompactPageLoader } from "@/components/CompactPageLoader";
+import { getStoredSchoolSection } from "@/lib/schoolSystem";
 import { toast } from "sonner";
 import axios from "axios";
 
@@ -10,6 +12,7 @@ interface Subject {
   id: string;
   name: string;
   code: string;
+  section: "englophone";
   coefficient: number;
   cycle: string;
   periodsPerWeek: number;
@@ -23,13 +26,20 @@ interface SchoolClass {
   className: string;
   department: string;
   cycle: string;
+  schoolSection: "englophone";
   acedemicYear: string;
   classMasterId: string;
+  ratePerPeriod: number;
+  tuitionFee: number;
+  tuitionInstallments: number;
+  registrationFeeRequired: boolean;
+  registrationFeeAmount: number;
 }
 
 interface Teacher {
   id: string;
   fullName: string;
+  section: "englophone";
   subjectIds: string[];
 }
 
@@ -126,10 +136,11 @@ export function ClassesPage() {
       setLoading(true);
       console.log("Fetching data...");
 
+      const activeSection = getStoredSchoolSection();
       const [subjectsRes, classesRes, teachersRes] = await Promise.all([
-        axios.get(`${API_BASE}/subjects`),
-        axios.get(`${API_BASE}/classes`),
-        axios.get(`${API_BASE}/users`)
+        axios.get(`${API_BASE}/subjects`, { params: { section: activeSection } }),
+        axios.get(`${API_BASE}/classes`, { params: { section: activeSection } }),
+        axios.get(`${API_BASE}/users`, { params: { section: activeSection } })
       ]);
 
       console.log("Subjects response:", subjectsRes.data);
@@ -143,6 +154,7 @@ export function ClassesPage() {
           id: s._id,
           name: s.name,
           code: s.code,
+          section: s.section || "englophone",
           coefficient: s.coefficient,
           cycle: s.cycle,
           periodsPerWeek: s.periodsPerWeek ?? 4,
@@ -159,8 +171,14 @@ export function ClassesPage() {
           className: c.className,
           department: c.department,
           cycle: c.cycle,
+          schoolSection: c.schoolSection || c.section || "englophone",
           acedemicYear: c.acedemicYear,
-          classMasterId: c.classMasterId || ""
+          classMasterId: c.classMasterId || "",
+          ratePerPeriod: c.ratePerPeriod ?? (c.cycle === "1st Cycle" ? 500 : 700),
+          tuitionFee: Number(c.tuitionFee) || 0,
+          tuitionInstallments: Number(c.tuitionInstallments) || 1,
+          registrationFeeRequired: Boolean(c.registrationFeeRequired),
+          registrationFeeAmount: Number(c.registrationFeeAmount) || 0,
         }));
         setClasses(mappedClasses);
       }
@@ -171,6 +189,7 @@ export function ClassesPage() {
           .map((user: any) => ({
             id: user._id,
             fullName: user.name,
+            section: user.section || "englophone",
             subjectIds: user.subjectIds || []
           }));
         setTeachers(mappedTeachers);
@@ -226,6 +245,7 @@ export function ClassesPage() {
       const subjectData = {
         name: subject.name.trim(),
         code: subject.code.trim().toUpperCase(),
+        section: subject.section || "englophone",
         coefficient: subject.coefficient,
         cycle: subject.cycle,
         periodsPerWeek: Math.max(1, Math.min(20, Number(subject.periodsPerWeek) || 4)),
@@ -313,8 +333,14 @@ export function ClassesPage() {
         className: schoolClass.className,
         department: schoolClass.department,
         cycle: schoolClass.cycle,
+        schoolSection: schoolClass.schoolSection || "englophone",
         acedemicYear: schoolClass.acedemicYear,
-        classMasterId: schoolClass.classMasterId
+        classMasterId: schoolClass.classMasterId,
+        ratePerPeriod: Number(schoolClass.ratePerPeriod) || 0,
+        tuitionFee: Number(schoolClass.tuitionFee),
+        tuitionInstallments: Number(schoolClass.tuitionInstallments),
+        registrationFeeRequired: schoolClass.registrationFeeRequired,
+        registrationFeeAmount: schoolClass.registrationFeeRequired ? Number(schoolClass.registrationFeeAmount) : 0,
       };
 
       console.log("Class data to save:", classData);
@@ -369,14 +395,7 @@ export function ClassesPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-black/60">Loading data...</p>
-        </div>
-      </div>
-    );
+    return <CompactPageLoader label="Loading classes and subjects..." />;
   }
 
   return (
@@ -386,11 +405,11 @@ export function ClassesPage() {
         <p className="text-sm text-black/60 mt-1">Cameroonian secondary structure · Forms 1–Upper 6th · Arts / Science / Commercial</p>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid min-w-0 gap-6 items-start lg:grid-cols-2">
         {/* Classes Table */}
-        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
-          <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
-            <h3 className="font-display font-bold">
+        <div className="flex min-w-0 max-h-[620px] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 px-4 py-3 sm:px-5 sm:py-4">
+            <h3 className="min-w-0 flex-1 font-display font-bold">
               Classes ({filteredClasses.length}{hasClassFilters ? ` of ${classes.length}` : ""})
             </h3>
             {canEdit && (
@@ -399,14 +418,14 @@ export function ClassesPage() {
                   setEditingClass(null);
                   setShowNewClass(true);
                 }}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 bg-brand text-white rounded-lg font-bold hover:bg-brand/90"
+                className="flex min-h-10 shrink-0 items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-bold text-white hover:bg-brand/90"
               >
                 <Plus className="size-3.5" /> Class
               </button>
             )}
           </div>
 
-          <div className="px-5 py-3 border-b border-stone-200 space-y-2">
+          <div className="space-y-2 border-b border-stone-200 px-3 py-3 sm:px-5">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
               <input
@@ -429,7 +448,7 @@ export function ClassesPage() {
               <select
                 value={classDepartment}
                 onChange={(e) => setClassDepartment(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Departments</option>
                 {uniqueDepartments.map((d) => (
@@ -439,7 +458,7 @@ export function ClassesPage() {
               <select
                 value={classCycle}
                 onChange={(e) => setClassCycle(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Cycles</option>
                 {uniqueCycles.map((c) => (
@@ -449,7 +468,7 @@ export function ClassesPage() {
               <select
                 value={classYear}
                 onChange={(e) => setClassYear(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Years</option>
                 {uniqueYears.map((y) => (
@@ -459,20 +478,24 @@ export function ClassesPage() {
               {hasClassFilters && (
                 <button
                   onClick={clearClassFilters}
-                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-xl border border-stone-200 font-semibold hover:bg-stone-50"
+                  className="flex min-h-10 shrink-0 items-center gap-1 rounded-xl border border-stone-200 px-3 py-1.5 text-xs font-semibold hover:bg-stone-50"
                 >
                   <X className="size-3.5" /> Clear
                 </button>
               )}
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-stone-50 text-left text-[10px] uppercase tracking-widest text-black/50 font-bold">
+          <div className="min-h-0 min-w-0 max-h-[470px] overflow-auto overscroll-contain">
+            <table className="w-full min-w-[680px] text-sm">
+              <thead className="bg-stone-50 text-left text-[10px] uppercase tracking-widest text-black/50 font-bold sticky top-0 z-10">
                 <tr>
                   <th className="px-5 py-3">Class</th>
                   <th className="px-5 py-3">Department</th>
                   <th className="px-5 py-3">Cycle</th>
+                  <th className="px-5 py-3">Rate / Period</th>
+                  <th className="px-5 py-3">Tuition</th>
+                  <th className="px-5 py-3">Installments</th>
+                  <th className="px-5 py-3">Registration</th>
                   <th className="px-5 py-3">Academic Year</th>
                   {canEdit && <th className="px-5 py-3 text-right">Actions</th>}
                 </tr>
@@ -487,6 +510,10 @@ export function ClassesPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">{c.cycle}</td>
+                    <td className="px-5 py-3 text-sm font-semibold">{c.ratePerPeriod.toLocaleString()} FRS</td>
+                    <td className="px-5 py-3 text-sm font-semibold">{c.tuitionFee.toLocaleString()} XAF</td>
+                    <td className="px-5 py-3 text-sm">{c.tuitionInstallments}</td>
+                    <td className="px-5 py-3 text-xs">{c.registrationFeeRequired ? `${c.registrationFeeAmount.toLocaleString()} XAF required` : "Not required"}</td>
                     <td className="px-5 py-3 text-xs">{c.acedemicYear}</td>
                     {canEdit && (
                       <td className="px-5 py-3 text-right">
@@ -496,13 +523,13 @@ export function ClassesPage() {
                               setShowNewClass(false);
                               setEditingClass(c);
                             }}
-                            className="size-7 grid place-items-center rounded-lg hover:bg-stone-100 text-black/60"
+                            className="grid size-10 place-items-center rounded-lg text-black/60 hover:bg-stone-100 sm:size-8"
                           >
                             <Pencil className="size-3" />
                           </button>
                           <button
                             onClick={() => removeClass(c.id)}
-                            className="size-7 grid place-items-center rounded-lg hover:bg-red-50 text-red-600"
+                            className="grid size-10 place-items-center rounded-lg text-red-600 hover:bg-red-50 sm:size-8"
                           >
                             <Trash2 className="size-3" />
                           </button>
@@ -513,7 +540,7 @@ export function ClassesPage() {
                 ))}
                 {filteredClasses.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-8 text-center text-black/40">
+                    <td colSpan={canEdit ? 9 : 8} className="px-5 py-8 text-center text-black/40">
                       {classes.length === 0
                         ? 'No classes found. Click "Add Class" to create one.'
                         : "No classes match your filters."}
@@ -526,9 +553,9 @@ export function ClassesPage() {
         </div>
 
         {/* Subjects Table */}
-        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
-          <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
-            <h3 className="font-display font-bold">
+        <div className="flex min-w-0 max-h-[620px] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 px-4 py-3 sm:px-5 sm:py-4">
+            <h3 className="min-w-0 flex-1 font-display font-bold">
               Subjects ({filteredSubjects.length}{hasSubjectFilters ? ` of ${subjects.length}` : ""})
             </h3>
             {canEdit && (
@@ -537,14 +564,14 @@ export function ClassesPage() {
                   setEditingSubject(null);
                   setShowNewSubject(true);
                 }}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 bg-brand text-white rounded-lg font-bold hover:bg-brand/90"
+                className="flex min-h-10 shrink-0 items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-bold text-white hover:bg-brand/90"
               >
                 <Plus className="size-3.5" /> Subject
               </button>
             )}
           </div>
 
-          <div className="px-5 py-3 border-b border-stone-200 space-y-2">
+          <div className="space-y-2 border-b border-stone-200 px-3 py-3 sm:px-5">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black/40" />
               <input
@@ -567,7 +594,7 @@ export function ClassesPage() {
               <select
                 value={subjectCycle}
                 onChange={(e) => setSubjectCycle(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Cycles</option>
                 {uniqueSubjectCycles.map((c) => (
@@ -577,7 +604,7 @@ export function ClassesPage() {
               <select
                 value={subjectClassId}
                 onChange={(e) => setSubjectClassId(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Classes</option>
                 {classes.map((c) => (
@@ -587,7 +614,7 @@ export function ClassesPage() {
               <select
                 value={subjectTeacherId}
                 onChange={(e) => setSubjectTeacherId(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-xs font-medium"
+                className="min-w-0 max-w-full flex-1 basis-[calc(50%-0.5rem)] rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs font-medium sm:flex-none sm:basis-auto sm:px-3 sm:py-1.5"
               >
                 <option value="">All Teachers</option>
                 {teachers.map((t) => (
@@ -597,16 +624,16 @@ export function ClassesPage() {
               {hasSubjectFilters && (
                 <button
                   onClick={clearSubjectFilters}
-                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-xl border border-stone-200 font-semibold hover:bg-stone-50"
+                  className="flex min-h-10 shrink-0 items-center gap-1 rounded-xl border border-stone-200 px-3 py-1.5 text-xs font-semibold hover:bg-stone-50"
                 >
                   <X className="size-3.5" /> Clear
                 </button>
               )}
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-stone-50 text-left text-[10px] uppercase tracking-widest text-black/50 font-bold">
+          <div className="min-h-0 min-w-0 max-h-[470px] overflow-auto overscroll-contain">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead className="bg-stone-50 text-left text-[10px] uppercase tracking-widest text-black/50 font-bold sticky top-0 z-10">
                 <tr>
                   <th className="px-5 py-3">Subject</th>
                   <th className="px-5 py-3">Code</th>
@@ -652,13 +679,13 @@ export function ClassesPage() {
                                 setShowNewSubject(false);
                                 setEditingSubject(s);
                               }}
-                              className="size-7 grid place-items-center rounded-lg hover:bg-stone-100 text-black/60"
+                              className="grid size-10 place-items-center rounded-lg text-black/60 hover:bg-stone-100 sm:size-8"
                             >
                               <Pencil className="size-3" />
                             </button>
                             <button
                               onClick={() => removeSubject(s.id)}
-                              className="size-7 grid place-items-center rounded-lg hover:bg-red-50 text-red-600"
+                              className="grid size-10 place-items-center rounded-lg text-red-600 hover:bg-red-50 sm:size-8"
                             >
                               <Trash2 className="size-3" />
                             </button>
@@ -690,6 +717,7 @@ export function ClassesPage() {
             id: "s_" + Math.random().toString(36).slice(2, 9),
             name: "",
             code: "",
+            section: getStoredSchoolSection(),
             coefficient: 1,
             cycle: "1st Cycle",
             periodsPerWeek: 4,
@@ -712,8 +740,14 @@ export function ClassesPage() {
             className: "",
             department: "Science",
             cycle: "1st Cycle",
+            schoolSection: getStoredSchoolSection(),
             acedemicYear: "2024-2025",
-            classMasterId: ""
+            classMasterId: "",
+            ratePerPeriod: 500,
+            tuitionFee: 0,
+            tuitionInstallments: 1,
+            registrationFeeRequired: false,
+            registrationFeeAmount: 0,
           }}
           teachers={teachers}
           onSave={upsertClass}
@@ -743,6 +777,9 @@ function SubjectDialog({
 
   const set = <K extends keyof Subject>(k: K, v: Subject[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const sectionClasses = classes.filter((schoolClass) => schoolClass.schoolSection === form.section);
+  const sectionTeachers = teachers.filter((teacher) => teacher.section === form.section);
 
   const toggleClass = (id: string) => {
     if (form.classIds.includes(id)) {
@@ -851,7 +888,7 @@ function SubjectDialog({
         <div className="mt-4">
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/50 mb-2">Assigned to Classes</div>
           <div className="flex flex-wrap gap-2">
-            {classes.map((c) => (
+            {sectionClasses.map((c) => (
               <button
                 key={c.id}
                 type="button"
@@ -864,7 +901,7 @@ function SubjectDialog({
                 {c.className + " " + c.department}
               </button>
             ))}
-            {classes.length === 0 && (
+            {sectionClasses.length === 0 && (
               <span className="text-xs text-black/40">No classes available</span>
             )}
           </div>
@@ -872,7 +909,7 @@ function SubjectDialog({
           {form.classIds.length > 0 && (
             <div className="mt-3 space-y-2">
               <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Periods per week by class</div>
-              {classes
+              {sectionClasses
                 .filter((c) => form.classIds.includes(c.id))
                 .map((c) => (
                   <div key={c.id} className="flex items-center justify-between gap-3 bg-stone-50 rounded-lg px-3 py-2">
@@ -898,7 +935,7 @@ function SubjectDialog({
         <div className="mt-4">
           <div className="text-[10px] uppercase tracking-widest font-bold text-black/50 mb-2">Assigned Teachers</div>
           <div className="flex flex-wrap gap-2">
-            {teachers.map((t) => (
+            {sectionTeachers.map((t) => (
               <button
                 key={t.id}
                 type="button"
@@ -911,7 +948,7 @@ function SubjectDialog({
                 {t.fullName}
               </button>
             ))}
-            {teachers.length === 0 && (
+            {sectionTeachers.length === 0 && (
               <span className="text-xs text-black/40">No teachers available</span>
             )}
           </div>
@@ -956,10 +993,16 @@ function ClassDialog({
   const set = <K extends keyof SchoolClass>(k: K, v: SchoolClass[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const classNames = ["Beginers1", "Beginers2", "Olevel 3", "Olevel 4", "Olevel 5", "Alevel", "Graduated"];
-  const departments = ["General", "Science", "Arts", "Commercial"];
+  const classNames = ["Form 1", "Form 2", "Form 3", "Form 4", "Form 5", "Lower 6th", "Upper 6th", "Graduated"];
+  const departments = [
+    "General", "Science", "Arts", "Commercial", "Electrical & Electronics",
+    "Civil Engineering & Woodwork", "Mechanical", "Home Economics & Social",
+    "Accounting", "Marketing & Sales", "Secretarial Administration & Communication",
+    "Home Economics & Social Care"
+  ];
   const cycles = ["1st Cycle", "2nd Cycle"];
   const academicYears = ["2026-2027", "2027-2028", "2028-2029"];
+  const sectionTeachers = teachers.filter((teacher) => teacher.section === "englophone");
 
   const handleSave = async () => {
     // Validate before saving
@@ -979,6 +1022,18 @@ function ClassDialog({
       toast.error("Please select an academic year");
       return;
     }
+    if (form.className !== "Graduated" && form.tuitionFee <= 0) {
+      toast.error("Set a tuition amount greater than zero");
+      return;
+    }
+    if (!Number.isInteger(form.tuitionInstallments) || form.tuitionInstallments < 1 || form.tuitionInstallments > 12) {
+      toast.error("Choose between 1 and 12 tuition installments");
+      return;
+    }
+    if (form.registrationFeeRequired && form.registrationFeeAmount <= 0) {
+      toast.error("Set the registration fee amount or turn off the registration fee requirement");
+      return;
+    }
 
 
     setSaving(true);
@@ -993,7 +1048,7 @@ function ClassDialog({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 grid place-items-center p-4" onClick={onCancel}>
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="font-display font-bold text-xl mb-5">
           {initial.className ? "Edit Class" : "Add Class"}
         </h3>
@@ -1030,7 +1085,16 @@ function ClassDialog({
           <Field label="Cycle*">
             <select
               value={form.cycle}
-              onChange={(e) => set("cycle", e.target.value)}
+              onChange={(e) => {
+                const nextCycle = e.target.value;
+                setForm((current) => ({
+                  ...current,
+                  cycle: nextCycle,
+                  ratePerPeriod: current.ratePerPeriod === (current.cycle === "1st Cycle" ? 500 : 700)
+                    ? nextCycle === "1st Cycle" ? 500 : 700
+                    : current.ratePerPeriod,
+                }));
+              }}
               className={inputCls}
               required
             >
@@ -1063,11 +1127,72 @@ function ClassDialog({
               required
             >
               <option value="">Select class master</option>
-              {teachers.map((t) => (
+              {sectionTeachers.map((t) => (
                 <option key={t.id} value={t.id}>{t.fullName}</option>
               ))}
             </select>
           </Field>
+
+          <Field label="Teacher Pay Per Period (FRS)*">
+            <input
+              type="number"
+              min={0}
+              step={50}
+              value={form.ratePerPeriod}
+              onChange={(e) => set("ratePerPeriod", Math.max(0, Number(e.target.value) || 0))}
+              className={inputCls}
+              required
+            />
+          </Field>
+          <Field label="Student Tuition (XAF)*">
+            <input
+              type="number"
+              min={form.className === "Graduated" ? 0 : 1}
+              step={1000}
+              value={form.tuitionFee}
+              onChange={(e) => set("tuitionFee", Math.max(0, Number(e.target.value) || 0))}
+              className={inputCls}
+              required={form.className !== "Graduated"}
+            />
+          </Field>
+          <Field label="Tuition Installments (1–12)*">
+            <input
+              type="number"
+              min={1}
+              max={12}
+              step={1}
+              value={form.tuitionInstallments}
+              onChange={(e) => set("tuitionInstallments", Number(e.target.value) || 1)}
+              className={inputCls}
+              required
+            />
+          </Field>
+          <label className="flex items-center gap-3 rounded-lg border border-stone-200 px-3 py-2.5 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.registrationFeeRequired}
+              onChange={(e) => setForm((current) => ({
+                ...current,
+                registrationFeeRequired: e.target.checked,
+                registrationFeeAmount: e.target.checked ? current.registrationFeeAmount : 0,
+              }))}
+              className="size-4 accent-blue-700"
+            />
+            <span className="text-sm font-semibold">Require a separate registration fee</span>
+          </label>
+          {form.registrationFeeRequired && (
+            <Field label="Registration Fee (XAF)*">
+              <input
+                type="number"
+                min={1}
+                step={500}
+                value={form.registrationFeeAmount}
+                onChange={(e) => set("registrationFeeAmount", Math.max(0, Number(e.target.value) || 0))}
+                className={inputCls}
+                required
+              />
+            </Field>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
