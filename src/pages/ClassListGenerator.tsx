@@ -113,8 +113,7 @@ function buildPageHtml(ctx: {
             <td style="${cell}font-weight:600;">${student ? escapeHtml(student.fullName) : ""}</td>
             <td style="${cell}text-align:center;">${student ? sexLabel(student.gender) : ""}</td>
             ${sequences.map(() => blank).join("")}
-            ${blank}
-            ${blank}
+          
           </tr>`;
     }).join("");
 
@@ -163,9 +162,8 @@ function buildPageHtml(ctx: {
         <div style="margin:0 16px;">
           <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
             <colgroup>
-              <col style="width:6%;"/><col style="width:15%;"/><col style="width:31%;"/><col style="width:5%;"/>
-              ${sequences.map(() => `<col style="width:9%;"/>`).join("")}
-              <col style="width:9%;"/><col style="width:${100 - 6 - 15 - 31 - 5 - 9 * sequences.length - 9}%;"/>
+              <col style="width:6%;"/><col style="width:16%;"/><col style="width:38%;"/><col style="width:6%;"/>
+              ${sequences.map(() => `<col style="width:${(100 - 6 - 16 - 38 - 6) / sequences.length}%;"/>`).join("")}
             </colgroup>
             <thead>
               <tr>
@@ -174,8 +172,7 @@ function buildPageHtml(ctx: {
                 <th style="${headCell}text-align:left;padding-left:8px;">Full name</th>
                 <th style="${headCell}">Sex</th>
                 ${sequences.map((sequence) => `<th style="${headCell}">${escapeHtml(sequence)}<br/><span style="font-weight:500;font-size:8.5px;">/20</span></th>`).join("")}
-                <th style="${headCell}">Average<br/><span style="font-weight:500;font-size:8.5px;">/20</span></th>
-                <th style="${headCell}">Remarks</th>
+               
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -285,15 +282,13 @@ export function ClassListGeneratorPage() {
         ? `${slugify(selectedClass.className)}-${slugify(selectedClass.department)}-${slugify(selectedTerm)}-class-list`
         : "class-list";
 
-    const headers = ["N°", "Matricule", "Full Name", "Sex", ...termConfig.sequences.map((sequence) => `${sequence} /20`), "Average /20", "Remarks"];
+    const headers = ["N°", "Matricule", "Full Name", "Sex", ...termConfig.sequences.map((sequence) => `${sequence} /20`)];
     const studentRow = (student: Student, index: number) => [
         index + 1,
         student.matricule || "",
         student.fullName,
         sexLabel(student.gender),
         ...termConfig.sequences.map(() => ""),
-        "",
-        "",
     ];
 
     const canExport = !loading && !classDataLoading && !!selectedClass;
@@ -398,7 +393,7 @@ export function ClassListGeneratorPage() {
             const greenDark = "FF14532D";
 
             worksheet.columns = headers.map((_, index) => ({
-                width: index === 0 ? 6 : index === 1 ? 20 : index === 2 ? 34 : index === 3 ? 6 : index === headers.length - 1 ? 26 : 13,
+                width: index === 0 ? 6 : index === 1 ? 20 : index === 2 ? 34 : index === 3 ? 6 : 16,
             }));
 
             worksheet.mergeCells(`A1:${lastColumn}1`);
@@ -599,8 +594,6 @@ export function ClassListGeneratorPage() {
                                     {termConfig.sequences.map((sequence) => (
                                         <th key={sequence} className="border-l border-green-600 px-3 py-3 text-center font-semibold">{sequence} /20</th>
                                     ))}
-                                    <th className="border-l border-green-600 px-3 py-3 text-center font-semibold">Average /20</th>
-                                    <th className="border-l border-green-600 px-3 py-3 text-center font-semibold">Remarks</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -613,8 +606,7 @@ export function ClassListGeneratorPage() {
                                         {termConfig.sequences.map((sequence) => (
                                             <td key={sequence} className="border-l border-stone-200 px-3 py-2.5" />
                                         ))}
-                                        <td className="border-l border-stone-200 px-3 py-2.5" />
-                                        <td className="border-l border-stone-200 px-3 py-2.5" />
+
                                     </tr>
                                 ))}
                             </tbody>

@@ -38,8 +38,8 @@ const CARD_PRESETS = {
     custom: { label: "Custom size", width: 85.6, height: 54 },
 } as const;
 
-const SCHOOL_NAME = "BCHS DOUALA";
-const SCHOOL_BRAND_BLUE = "#155DAA";
+const SCHOOL_NAME = "MANFESS";
+const SCHOOL_BRAND_GREEN = "#15803D";
 const PREVIEW_BATCH_SIZE = 36;
 
 function initialsFromName(name: string) {
@@ -54,7 +54,7 @@ function initialsFromName(name: string) {
 function InfoRow({ label, value }: { label: string; value: string }) {
     return (
         <div style={{ display: "flex", justifyContent: "space-between", gap: "2mm", fontSize: "6px", color: "#5b6472" }}>
-            <span style={{ color: SCHOOL_BRAND_BLUE, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</span>
+            <span style={{ color: SCHOOL_BRAND_GREEN, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</span>
             <span style={{ color: "#121212", fontWeight: 700, textAlign: "right", maxWidth: "18mm", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
         </div>
     );
@@ -432,7 +432,7 @@ export function StudentIdCardsPage() {
                                         <div
                                             style={{
                                                 height: "14mm",
-                                                background: "linear-gradient(135deg, #155DAA 0%, #0b3f7d 100%)",
+                                                background: "linear-gradient(135deg, #15803D 0%, #14532D 100%)",
                                                 color: "white",
                                                 padding: "2.6mm 3.4mm 2mm",
                                                 display: "flex",
@@ -454,7 +454,7 @@ export function StudentIdCardsPage() {
                                                         fontSize: "6px",
                                                     }}
                                                 >
-                                                    BCHS
+                                                    MFS
                                                 </div>
                                                 <div>
                                                     <div style={{ fontSize: "8px", fontWeight: 800, letterSpacing: "0.12em" }}>{SCHOOL_NAME}</div>
@@ -484,8 +484,8 @@ export function StudentIdCardsPage() {
                                                     minWidth: "18mm",
                                                     borderRadius: "2.8mm",
                                                     overflow: "hidden",
-                                                    background: "linear-gradient(135deg, #EAF2FB, #d8e7f8)",
-                                                    border: "1px solid rgba(21,93,170,0.3)",
+                                                    background: "linear-gradient(135deg, #E8F5EC, #D3EBDA)",
+                                                    border: "1px solid rgba(21,128,61,0.3)",
                                                     display: "grid",
                                                     placeItems: "center",
                                                     boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.6)",
@@ -499,7 +499,7 @@ export function StudentIdCardsPage() {
                                                     <div style={{ fontSize: "12px", fontWeight: 800, lineHeight: 1.15, color: "#121212", wordBreak: "break-word" }}>
                                                         {student.fullName}
                                                     </div>
-                                                    <div style={{ marginTop: "1.5mm", fontSize: "6.5px", color: SCHOOL_BRAND_BLUE, letterSpacing: "0.08em", fontWeight: 700 }}>
+                                                    <div style={{ marginTop: "1.5mm", fontSize: "6.5px", color: SCHOOL_BRAND_GREEN, letterSpacing: "0.08em", fontWeight: 700 }}>
                                                         {displayMatricule}
                                                     </div>
                                                 </div>
@@ -516,8 +516,8 @@ export function StudentIdCardsPage() {
 
                                         <div
                                             style={{
-                                                borderTop: "1px solid rgba(21,93,170,0.2)",
-                                                background: "#EAF2FB",
+                                                borderTop: "1px solid rgba(21,128,61,0.2)",
+                                                background: "#E8F5EC",
                                                 padding: "2mm 3.2mm 3mm",
                                                 display: "flex",
                                                 alignItems: "center",
@@ -525,7 +525,7 @@ export function StudentIdCardsPage() {
                                                 gap: "2mm",
                                             }}
                                         >
-                                            <div style={{ fontSize: "6px", color: SCHOOL_BRAND_BLUE, letterSpacing: "0.08em" }}>
+                                            <div style={{ fontSize: "6px", color: SCHOOL_BRAND_GREEN, letterSpacing: "0.08em" }}>
                                                 VALID {new Date().getFullYear()}
                                             </div>
                                             <div
@@ -533,9 +533,9 @@ export function StudentIdCardsPage() {
                                                     fontSize: "6px",
                                                     fontWeight: 800,
                                                     letterSpacing: "0.15em",
-                                                    color: SCHOOL_BRAND_BLUE,
+                                                    color: SCHOOL_BRAND_GREEN,
                                                     padding: "1.2mm 2.1mm",
-                                                    border: "1px solid rgba(21,93,170,0.35)",
+                                                    border: "1px solid rgba(21,128,61,0.35)",
                                                     borderRadius: "999px",
                                                     background: "white",
                                                 }}
@@ -564,9 +564,9 @@ export function StudentIdCardsPage() {
 
             <style>{`
         .student-id-card {
-          background: linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
-          border: 1px solid rgba(21, 93, 170, 0.18);
-          box-shadow: 0 18px 35px rgba(21, 93, 170, 0.14);
+          background: linear-gradient(180deg, #ffffff 0%, #f6fbf7 100%);
+          border: 1px solid rgba(21, 128, 61, 0.18);
+          box-shadow: 0 18px 35px rgba(21, 128, 61, 0.14);
           color: #111827;
           page-break-inside: avoid;
         }
