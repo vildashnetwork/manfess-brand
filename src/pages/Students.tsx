@@ -297,9 +297,14 @@ export function StudentsPage() {
         setShowNew(false);
       }
     } catch (error: any) {
-      console.error("Error creating student:", error.response?.data ?? error);
-      // also useful in the UI:
-      // toast.error(error.response?.data?.errors?.join(", ") || error.response?.data?.message);
+      const data = error?.response?.data;
+      const detail =
+        (Array.isArray(data?.errors) && data.errors.length ? data.errors.join(", ") : "") ||
+        data?.message ||
+        error?.message ||
+        "Could not save student";
+      console.error("Error creating student:", data ?? error);
+      toast.error(detail);
       throw error;
     }
   };
