@@ -171,7 +171,8 @@ export function ClassesPage() {
           className: c.className,
           department: c.department,
           cycle: c.cycle,
-          schoolSection: c.schoolSection || c.section || "englophone",
+          schoolSection: c.schoolSection || "englophone",
+          section: c.section || "",
           acedemicYear: c.acedemicYear,
           classMasterId: c.classMasterId || "",
           ratePerPeriod: c.ratePerPeriod ?? (c.cycle === "1st Cycle" ? 500 : 700),
@@ -993,7 +994,13 @@ function ClassDialog({
   const set = <K extends keyof SchoolClass>(k: K, v: SchoolClass[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const classNames = ["Form 1", "Form 2", "Form 3", "Form 4", "Form 5", "Lower 6th", "Upper 6th", "Graduated"];
+  const classNames = ["Beginers",
+    "Olevel 3",
+    "Olevel 4",
+    "Olevel 5",
+    "Alevel",
+    "Graduated"
+  ];
   const departments = [
     "General", "Science", "Arts", "Commercial", "Electrical & Electronics",
     "Civil Engineering & Woodwork", "Mechanical", "Home Economics & Social",

@@ -35,8 +35,12 @@ export function promotionStatus(avg: number): "Promoted" | "Repeat" {
 import type { FormLevel } from "./types";
 
 const FORM_ORDER: FormLevel[] = [
-  "Form 1", "Form 2", "Form 3", "Form 4", "Form 5",
-  "Lower 6th", "Upper 6th", "Graduated",
+  "Beginers",
+  "Olevel 3",
+  "Olevel 4",
+  "Olevel 5",
+  "Alevel",
+  "Graduated",
 ];
 
 export function nextForm(f: FormLevel): FormLevel {

@@ -29,7 +29,7 @@ const NAV: NavItem[] = [
   { to: "/app/teacher-timetable", label: "Teacher Timetable", icon: Calendar, roles: ["teacher"] },
   { to: "/app/teacher-attendance", label: "Teacher Attendance", icon: Calendar, roles: ["super_admin", "admin"] },
   { to: "/app/report-cards", label: "Report Cards", icon: FileText, end: true, roles: ["super_admin", "admin"] },
-  { to: "/app/report-cards/bulk", label: "Bulk Report Cards", icon: FileText, roles: ["super_admin", "admin"] },
+  // { to: "/app/report-cards/bulk", label: "Bulk Report Cards", icon: FileText, roles: ["super_admin", "admin"] },
   { to: "/app/class-lists", label: "Class Lists", icon: Download, roles: ["super_admin", "admin", "bursar"] },
   { to: "/app/promotion", label: "Promotion", icon: ArrowUpRight, roles: ["super_admin", "admin"] },
   { to: "/app/fees", label: "Fees & Finance", icon: Wallet, roles: ["super_admin", "admin", "bursar"] },

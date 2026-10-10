@@ -34,6 +34,7 @@ interface Student {
   registrationFeeRequired?: boolean;
   registrationFeeAmount?: number;
   registrationFeePaid?: number;
+  upfrontPayment?: number;
 }
 
 interface Class {
@@ -261,13 +262,14 @@ export function StudentsPage() {
       }
       const tuitionPaid = Number(student.tuitionFeePaid) || 0;
       const registrationPaid = Number(student.registrationFeePaid) || 0;
-      const feesPaid = tuitionPaid + registrationPaid;
+      const upfrontPayment = Math.max(0, Number((student as any).upfrontPayment) || 0);
+      const feesPaid = tuitionPaid + registrationPaid + upfrontPayment;
       const feesDue = Math.max(0, totalFee - feesPaid);
 
       const studentData = {
         fullName: student.fullName.trim(),
         gender: student.gender,
-        section: student.section || "englophone",
+        section: classObj.schoolSection || student.section || "englophone",
         dob: student.dob,
         classId: student.classId,
         department: student.department,
@@ -280,7 +282,7 @@ export function StudentsPage() {
         feesDue,
         tuitionFee: classObj.tuitionFee,
         tuitionInstallments: classObj.tuitionInstallments,
-        tuitionFeePaid: tuitionPaid,
+        tuitionFeePaid: tuitionPaid + upfrontPayment,
         tuitionInstallmentsPaid: Number(student.tuitionInstallmentsPaid) || 0,
         registrationFeeRequired: classObj.registrationFeeRequired,
         registrationFeeAmount: classObj.registrationFeeRequired ? classObj.registrationFeeAmount : 0,
@@ -295,8 +297,10 @@ export function StudentsPage() {
         setShowNew(false);
       }
     } catch (error: any) {
-      console.error("Error creating student:", error);
-      handleApiError(error);
+      console.error("Error creating student:", error.response?.data ?? error);
+      // also useful in the UI:
+      // toast.error(error.response?.data?.errors?.join(", ") || error.response?.data?.message);
+      throw error;
     }
   };
 
@@ -335,7 +339,7 @@ export function StudentsPage() {
       const studentData = {
         fullName: student.fullName.trim(),
         gender: student.gender,
-        section: student.section || "englophone",
+        section: classObj.schoolSection || student.section || "englophone",
         dob: student.dob,
         classId: student.classId,
         department: student.department,
@@ -871,7 +875,8 @@ export function StudentsPage() {
             photoUrl: "",
             registrationDate: new Date().toISOString().slice(0, 10),
             feesPaid: 0,
-            feesDue: 0
+            feesDue: 0,
+            upfrontPayment: 0,
           }}
           classes={classes}
           mode="create"
@@ -1151,6 +1156,32 @@ function StudentDialog({
                   <p>Registration fee <strong className="block text-sm">{registrationRequired ? `${registrationAmount.toLocaleString()} XAF required` : "Not required"}</strong></p>
                   <p>Total required <strong className="block text-sm">{(tuitionFee + registrationAmount).toLocaleString()} XAF</strong></p>
                 </div>
+                <div className="mt-3 border-t border-blue-200/60 pt-3">
+                  <Field label="Amount the student pays now (XAF)">
+                    <input
+                      type="number"
+                      min={0}
+                      max={tuitionFee + registrationAmount}
+                      step={500}
+                      value={Number(form.upfrontPayment) || 0}
+                      onChange={(e) => set("upfrontPayment", Math.max(0, Number(e.target.value) || 0) as any)}
+                      className={inputCls}
+                      placeholder="e.g. 25000"
+                    />
+                  </Field>
+                  {(() => {
+                    const totalRequired = tuitionFee + registrationAmount;
+                    const paidNow = Math.max(0, Number(form.upfrontPayment) || 0);
+                    const balance = Math.max(0, totalRequired - paidNow);
+                    return (
+                      <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                        <p className="rounded-lg bg-white/70 px-3 py-2">Paid now <strong className="block text-sm text-green-700">{paidNow.toLocaleString()} XAF</strong></p>
+                        <p className="rounded-lg bg-white/70 px-3 py-2">Balance left <strong className={`block text-sm ${balance > 0 ? "text-red-600" : "text-green-700"}`}>{balance.toLocaleString()} XAF{balance === 0 && totalRequired > 0 ? " · Fully paid" : ""}</strong></p>
+                      </div>
+                    );
+                  })()}
+                  <p className="mt-2 text-xs text-black/55">Type what the student pays during registration — the balance updates live and is saved with the student.</p>
+                </div>
               </div>
             ) : (
               <p className="rounded-lg bg-stone-50 p-4 text-sm text-black/50">Choose a class to see its tuition and registration requirements.</p>
@@ -1244,6 +1275,8 @@ function StudentDialog({
               <ReviewItem label="Installments" value={`${installmentCount} equal payments`} />
               <ReviewItem label="Registration fee" value={registrationRequired ? `${registrationAmount.toLocaleString()} XAF required` : "Not required"} />
               <ReviewItem label="Total required" value={`${(tuitionFee + registrationAmount).toLocaleString()} XAF`} />
+              <ReviewItem label="Paid at registration" value={`${Math.max(0, Number(form.upfrontPayment) || 0).toLocaleString()} XAF`} />
+              <ReviewItem label="Balance left" value={`${Math.max(0, tuitionFee + registrationAmount - (Math.max(0, Number(form.upfrontPayment) || 0))).toLocaleString()} XAF`} />
             </div>
             <p className="text-xs text-black/50">The fee plan is saved with the student. Payments can be recorded later under Fees & Finance.</p>
           </section>

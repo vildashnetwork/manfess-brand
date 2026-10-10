@@ -720,7 +720,7 @@ export function ReportCardsIndex() {
     const matricule = data.student.matricule || data.student.admissionNumber || "Not assigned";
     const defaultPortrait = data.student.gender === "female" ? "/female-student-avatar.svg" : "/male-student-avatar.svg";
     const photoUrl = escapeHtml(data.student.photoUrl || defaultPortrait);
-    const portrait = `<img src="${photoUrl}" alt="${escapeHtml(studentName)}" crossorigin="anonymous" onerror="this.onerror=null;this.src='${defaultPortrait}'" style="width:100%;height:100%;object-fit:cover;display:block;background:#EAF2FB;"/>`;
+    const portrait = `<img src="${photoUrl}" alt="${escapeHtml(studentName)}" crossorigin="anonymous" onerror="this.onerror=null;this.src='${defaultPortrait}'" style="width:100%;height:100%;object-fit:cover;display:block;background:#E8F5EC;"/>`;
 
     // Build sequence headers using display columns
     const seqHeaders = displayCols.map((col) =>
@@ -765,36 +765,36 @@ export function ReportCardsIndex() {
     const totalSeqCells = displayCols.map(() => `<td style="padding:5px 6px;border:1px solid #000000;text-align:center;">-</td>`).join("");
 
     return `
-      <div style="font-family:'Segoe UI',Arial,sans-serif;color:#17324D;max-width:1000px;margin:0 auto;border:1px solid #CADCF0;border-top:8px solid #155DAA;background:#ffffff;">
+      <div style="font-family:'Segoe UI',Arial,sans-serif;color:#14352A;max-width:1000px;margin:0 auto;border:1px solid #BFE0CA;border-top:8px solid #15803D;background:#ffffff;">
         <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:14px 16px;border-bottom:3px solid #d2ad4b;">
-          <div style="text-align:left;line-height:1.5;color:#155DAA;">
+          <div style="text-align:left;line-height:1.5;color:#15803D;">
             République du Cameroun<br/>
             <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Paix — Travail — Patrie</span><br/>
             Ministère des Enseignements Secondaires
           </div>
           <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-            <div style="width:48px;height:48px;border-radius:50%;background:#155DAA;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:12px;font-weight:900;">
-              BCHS
+            <div style="width:48px;height:48px;border-radius:50%;background:#15803D;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:12px;font-weight:900;">
+              MFS
             </div>
-            <div style="font-size:17px;font-weight:900;color:#155DAA;text-transform:none;">BCHS DOUALA</div>
+            <div style="font-size:11.5px;font-weight:900;color:#15803D;text-transform:none;text-align:center;line-height:1.25;max-width:260px;">M NDUM FAVOURED EVENING SECONDARY SCHOOL (MANFESS)</div>
             <div style="font-size:8.5px;color:#6b756d;font-weight:600;text-transform:none;">Excellence · Discipline · Service</div>
           </div>
-          <div style="text-align:right;line-height:1.5;color:#155DAA;">
+          <div style="text-align:right;line-height:1.5;color:#15803D;">
             Republic of Cameroon<br/>
             <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Peace — Work — Fatherland</span><br/>
             Ministry of Secondary Education
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 16px;padding:10px 14px;background:#EAF2FB;border-left:5px solid #155DAA;">
-          <div style="font-size:17px;font-weight:800;color:#155DAA;text-transform:uppercase;">${ctx.title} Report</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 16px;padding:10px 14px;background:#E8F5EC;border-left:5px solid #15803D;">
+          <div style="font-size:17px;font-weight:800;color:#15803D;text-transform:uppercase;">${ctx.title} Report</div>
           <div style="text-align:right;font-size:10px;font-weight:700;color:#52665a;">ACADEMIC YEAR<br/><span style="font-size:13px;color:#183328;">${escapeHtml(ctx.academicYear)}</span></div>
         </div>
 
-        <div style="display:grid;grid-template-columns:116px 1fr;gap:14px;margin:0 16px 14px;padding:12px;border:1px solid #CADCF0;border-radius:8px;background:#fff;">
-          <div style="width:116px;height:142px;overflow:hidden;border:2px solid #d2ad4b;border-radius:6px;background:#EAF2FB;">${portrait}</div>
+        <div style="display:grid;grid-template-columns:116px 1fr;gap:14px;margin:0 16px 14px;padding:12px;border:1px solid #BFE0CA;border-radius:8px;background:#fff;">
+          <div style="width:116px;height:142px;overflow:hidden;border:2px solid #d2ad4b;border-radius:6px;background:#E8F5EC;">${portrait}</div>
           <div>
-            <div style="font-size:18px;font-weight:800;color:#155DAA;margin-bottom:8px;">${escapeHtml(studentName)}</div>
+            <div style="font-size:18px;font-weight:800;color:#15803D;margin-bottom:8px;">${escapeHtml(studentName)}</div>
             <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;font-size:10px;">
               <div><b style="color:#718076;">MATRICULE</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(matricule)}</span></div>
               <div><b style="color:#718076;">CLASS</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(ctx.selectedClass?.className || "")}</span></div>
@@ -812,7 +812,7 @@ export function ReportCardsIndex() {
 
         <table style="width:100%;border-collapse:collapse;font-size:10px;border:1px solid #121212;margin-bottom:16px;">
           <thead>
-            <tr style="background:#155DAA;color:#fff;">
+            <tr style="background:#15803D;color:#fff;">
               <th style="padding:5px 6px;border:1px solid #d2ad4b;font-weight:700;text-align:center;font-size:10px;">Discipline / Subject</th>
               ${seqHeaders}
               <th style="padding:5px 6px;border:1px solid #000000;font-weight:700;text-align:center;font-size:10px;">Avg</th>
@@ -862,8 +862,8 @@ export function ReportCardsIndex() {
           </div>
         </div>
 
-          <div style="margin-bottom:14px;padding:10px 12px;border:1px solid #CADCF0;border-radius:8px;background:#F4F8FD;">
-          <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#155DAA;margin-bottom:7px;">Attendance · ${escapeHtml(ctx.title)}</div>
+          <div style="margin-bottom:14px;padding:10px 12px;border:1px solid #BFE0CA;border-radius:8px;background:#F2F9F4;">
+          <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#15803D;margin-bottom:7px;">Attendance · ${escapeHtml(ctx.title)}</div>
           <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:10px;">
             <div><b>Present</b><br/>${data.attendance?.present ?? 0} days</div>
             <div><b>Absent</b><br/>${data.attendance?.absent ?? 0} days</div>
@@ -904,7 +904,7 @@ export function ReportCardsIndex() {
         </div>
 
         <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #000000;padding-top:8px;font-size:8.5px;color:#000000;">
-          <div style="font-size:8.5px;color:#000000; font-weight:bold;">Issued by BCHS DOUALA · ${new Date().toLocaleDateString()}</div>
+          <div style="font-size:8.5px;color:#000000; font-weight:bold;">Issued by MANFESS · ${new Date().toLocaleDateString()}</div>
           <div style="font-family:monospace; color:#000000; font-weight:bold;">VERIF#${data.student.id.toUpperCase()}-${ctx.termId.toUpperCase()}</div>
         </div>
       </div>
@@ -1022,8 +1022,8 @@ export function ReportCardsIndex() {
         </div>
 
         {classDataLoading && (
-          <div className="flex items-center gap-3 border-b border-stone-100 bg-[#EAF2FB] px-5 py-3 text-sm text-[#155DAA]" role="status">
-            <div className="size-4 animate-spin rounded-full border-2 border-[#155DAA] border-t-transparent" />
+          <div className="flex items-center gap-3 border-b border-stone-100 bg-[#E8F5EC] px-5 py-3 text-sm text-[#15803D]" role="status">
+            <div className="size-4 animate-spin rounded-full border-2 border-[#15803D] border-t-transparent" />
             Loading this class’s students and marks…
           </div>
         )}

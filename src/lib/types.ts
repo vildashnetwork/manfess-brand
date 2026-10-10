@@ -1,7 +1,12 @@
 export type Role = "super_admin" | "admin" | "teacher" | "bursar" | "parent";
 
 export type Department = "Arts" | "Science" | "Commercial";
-export type FormLevel = "Form 1" | "Form 2" | "Form 3" | "Form 4" | "Form 5" | "Lower 6th" | "Upper 6th" | "Graduated";
+export type FormLevel = "Beginers" |
+  "Olevel 3" |
+  "Olevel 4" |
+  "Olevel 5" |
+  "Alevel" |
+  "Graduated";
 export type Sequence = 1 | 2 | 3 | 4 | 5 | 6;
 export type Term = "First" | "Second" | "Third";
 
