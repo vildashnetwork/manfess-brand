@@ -776,7 +776,7 @@ export function ReportCardsIndex() {
             <div style="width:48px;height:48px;border-radius:50%;background:#15803D;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:12px;font-weight:900;">
               MFS
             </div>
-            <div style="font-size:11.5px;font-weight:900;color:#15803D;text-transform:none;text-align:center;line-height:1.25;max-width:260px;">M NDUM FAVOURED EVENING SECONDARY SCHOOL (MANFESS)</div>
+            <div style="font-size:11.5px;font-weight:900;color:#15803D;text-transform:none;text-align:center;line-height:1.25;max-width:260px;">MANDUM FAVOURED EVENING SECONDARY SCHOOL (MANFESS)</div>
             <div style="font-size:8.5px;color:#6b756d;font-weight:600;text-transform:none;">Excellence · Discipline · Service</div>
           </div>
           <div style="text-align:right;line-height:1.5;color:#15803D;">

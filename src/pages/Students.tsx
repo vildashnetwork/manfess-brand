@@ -10,7 +10,7 @@ import "jspdf-autotable";
 const API_BASE = import.meta.env.VITE_API_URL;
 
 // Types
-interface Student {
+export interface Student {
   id: string;
   fullName: string;
   gender: string;
@@ -35,9 +35,15 @@ interface Student {
   registrationFeeAmount?: number;
   registrationFeePaid?: number;
   upfrontPayment?: number;
+  firstInstallment?: number;
+  secondInstallment?: number;
+  thirdInstallment?: number;
+  registrationRequirements?: Array<{ id: string; label: string; checked?: boolean }>;
+  // Ledger of individual payments (populated by the pay-fees route).
+  feePayments?: Array<{ feeType: "tuition" | "registration"; amount: number; installmentNumber?: number; paidAt: string }>;
 }
 
-interface Class {
+export interface Class {
   id: string;
   className: string;
   department: string;
@@ -51,7 +57,7 @@ interface Class {
   registrationFeeAmount: number;
 }
 
-function getClassTotalFee(schoolClass?: Class): number {
+export function getClassTotalFee(schoolClass?: Class): number {
   if (!schoolClass) return 0;
   return Number(schoolClass.tuitionFee || 0)
     + (schoolClass.registrationFeeRequired ? Number(schoolClass.registrationFeeAmount || 0) : 0);
@@ -338,7 +344,20 @@ export function StudentsPage() {
         toast.error("Configure this class's tuition in Classes & Subjects before enrolling students");
         return;
       }
-      const feesPaid = Number(student.feesPaid) || 0;
+      // The "amount the student pays now" field is the running TOTAL paid so far
+      // (tuition + registration). Split it: keep the registration portion already
+      // recorded, apply the rest to tuition, so the backend invariant
+      // feesPaid = tuitionFeePaid + registrationFeePaid is preserved.
+      const registrationRequired = Boolean(classObj.registrationFeeRequired);
+      const registrationFeeAmount = registrationRequired ? Number(classObj.registrationFeeAmount) || 0 : 0;
+      // The fee field holds the TOTAL paid so far (tuition + registration).
+      const totalPaid = Math.max(0, Number(student.upfrontPayment) || 0);
+      // Registration is settled first, up to the amount the class requires; the
+      // remainder is applied to tuition. This keeps tuitionFeePaid +
+      // registrationFeePaid == totalPaid, the invariant the backend relies on.
+      const registrationPaid = registrationRequired ? Math.min(registrationFeeAmount, totalPaid) : 0;
+      const tuitionFeePaid = Math.max(0, totalPaid - registrationPaid);
+      const feesPaid = tuitionFeePaid + registrationPaid;
       const feesDue = Math.max(0, totalFee - feesPaid);
 
       const studentData = {
@@ -357,8 +376,17 @@ export function StudentsPage() {
         feesDue,
         tuitionFee: classObj.tuitionFee,
         tuitionInstallments: classObj.tuitionInstallments,
-        registrationFeeRequired: classObj.registrationFeeRequired,
-        registrationFeeAmount: classObj.registrationFeeRequired ? classObj.registrationFeeAmount : 0,
+        tuitionFeePaid,
+        tuitionInstallmentsPaid: Number(student.tuitionInstallmentsPaid) || 0,
+        firstInstallment: Number(student.firstInstallment) || 0,
+        secondInstallment: Number(student.secondInstallment) || 0,
+        thirdInstallment: Number(student.thirdInstallment) || 0,
+        registrationRequirements: Array.isArray(student.registrationRequirements)
+          ? student.registrationRequirements
+          : [],
+        registrationFeeRequired: registrationRequired,
+        registrationFeeAmount,
+        registrationFeePaid: registrationPaid,
       };
 
       console.log("🔄 Updating student with ID:", student.id);
@@ -771,7 +799,12 @@ export function StudentsPage() {
                           <button
                             onClick={() => {
                               console.log("📝 Editing student:", s);
-                              setEditing(s);
+                              // The fee field ("amount the student pays now") is the
+                              // running total paid so far. Pre-fill it from the record so
+                              // the user sees and can edit the amount already paid.
+                              const alreadyPaid = Number(s.feesPaid) || 0
+                                || (Number(s.tuitionFeePaid) || 0) + (Number(s.registrationFeePaid) || 0);
+                              setEditing({ ...s, upfrontPayment: alreadyPaid });
                             }}
                             className="size-8 grid place-items-center rounded-lg hover:bg-stone-100 text-black/60"
                           >
@@ -905,7 +938,7 @@ export function StudentsPage() {
 }
 
 // Student Dialog Component
-function StudentDialog({
+export function StudentDialog({
   initial,
   classes,
   mode,
