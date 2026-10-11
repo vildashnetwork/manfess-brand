@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Save, RefreshCw, Award, Printer } from "lucide-react";
+import { CalendarDays, Save, RefreshCw, Award, Printer, Check } from "lucide-react";
 import { CompactPageLoader } from "@/components/CompactPageLoader";
 import axios from "axios";
 import { toast } from "sonner";
@@ -551,8 +551,13 @@ export function StudentAttendancePage() {
 
     const btnBase = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
 
+    // Register table grid. Compact (matricule shown under the name) from lg,
+    // full layout with a separate matricule column from xl. minmax(0,...) lets
+    // columns shrink instead of forcing horizontal scroll.
+    const rowGrid = "grid grid-cols-[minmax(0,2.4fr)_repeat(5,minmax(0,1fr))] xl:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_repeat(5,minmax(0,1fr))]";
+
     return (
-        <div className="space-y-4 sm:space-y-6">
+        <div className="mx-auto w-full max-w-[1400px] space-y-4 sm:space-y-6 2xl:space-y-8">
             {/* ---------- Header / controls ---------- */}
             <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm sm:p-4">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -621,41 +626,43 @@ export function StudentAttendancePage() {
                     <div className="px-4 py-10 text-center text-sm text-black/50">No students found for this class.</div>
                 ) : (
                     <>
-                        {/* ---------- Mobile: one card per student ---------- */}
-                        <div className="divide-y divide-stone-200 md:hidden">
+                        {/* ---------- Phones & tablets: one card per student (2 columns on tablets) ---------- */}
+                        <div className="-mb-px grid grid-cols-1 md:grid-cols-2 lg:hidden">
                             {classStudents.map((student) => (
-                                <div key={student.id} className="space-y-3 p-3">
+                                <div key={student.id} className="min-w-0 space-y-3 border-b border-stone-200 p-3 sm:p-4 md:odd:border-r">
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
                                             <div className="truncate text-sm font-semibold text-[#121212]">{student.fullName}</div>
-                                            <div className="mt-0.5 text-xs text-black/50">
+                                            <div className="mt-0.5 truncate text-xs text-black/50">
                                                 {student.matricule || student.admissionNumber || "—"} · {student.department || "General"}
                                             </div>
                                         </div>
                                         <button
                                             type="button"
                                             onClick={() => downloadAttendanceCertificate(student)}
+                                            aria-label={`Download certificate for ${student.fullName}`}
                                             className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition active:scale-[0.97] hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                                         >
                                             <Award className="size-4" />
-                                            Certificate
+                                            <span className="max-[359px]:hidden">Certificate</span>
                                         </button>
                                     </div>
 
-                                    <div className="grid grid-cols-5 gap-1.5">
+                                    <div className="grid grid-cols-5 gap-1 sm:gap-2">
                                         {weekdays.map((weekday) => {
                                             const status = attendance[`${student.id}:${weekday.value}`];
                                             const checked = status === "present" || status === "late";
                                             const isFuture = weekday.value > today;
+                                            const isToday = weekday.value === today;
                                             return (
                                                 <label
                                                     key={weekday.value}
-                                                    className={`flex min-h-[64px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border px-1 py-2 text-center transition active:scale-95 ${isFuture
+                                                    className={`flex min-h-[64px] min-w-0 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border px-0.5 py-2 text-center transition active:scale-95 ${isFuture
                                                         ? "cursor-not-allowed border-stone-100 bg-stone-50 opacity-50"
                                                         : checked
                                                             ? "border-emerald-300 bg-emerald-50"
                                                             : "border-stone-200 bg-white"
-                                                        }`}
+                                                        } ${isToday ? "ring-2 ring-emerald-500/60" : ""}`}
                                                 >
                                                     <span className="text-[10px] font-bold uppercase tracking-wide text-black/55">
                                                         {weekday.dayName.slice(0, 3)}
@@ -668,7 +675,7 @@ export function StudentAttendancePage() {
                                                         onChange={(event) => handleStatusChange(student.id, weekday.value, event.target.checked ? "present" : "absent")}
                                                         className="size-6 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed"
                                                     />
-                                                    <span className="text-[9px] text-black/45">{weekday.shortDate}</span>
+                                                    <span className="w-full truncate text-[9px] text-black/45">{weekday.shortDate}</span>
                                                 </label>
                                             );
                                         })}
@@ -677,25 +684,36 @@ export function StudentAttendancePage() {
                             ))}
                         </div>
 
-                        {/* ---------- Tablet / desktop: register table ---------- */}
-                        <div className="hidden overflow-x-auto md:block">
-                            <div className="min-w-[800px]">
-                                <div className="grid grid-cols-[minmax(190px,2fr)_minmax(120px,1.2fr)_repeat(5,minmax(88px,1fr))] border-b border-stone-200 bg-stone-50 text-[11px] font-bold uppercase tracking-[0.12em] text-black/55">
-                                    <div className="px-4 py-3">Student</div>
-                                    <div className="px-4 py-3">Matricule</div>
-                                    {weekdays.map((weekday) => (
-                                        <div key={weekday.value} className="px-2 py-3 text-center">
-                                            <div>{weekday.dayName}</div>
-                                            <div className="mt-1 font-medium normal-case tracking-normal text-black/45">{weekday.shortDate}</div>
-                                        </div>
-                                    ))}
+                        {/* ---------- Laptops & desktops: register table (no horizontal scroll) ---------- */}
+                        <div className="hidden overflow-x-auto lg:block">
+                            <div className="min-w-[620px]" role="table" aria-label="Weekly student attendance register">
+                                <div role="row" className={`${rowGrid} border-b border-stone-200 bg-stone-50 text-[11px] font-bold uppercase tracking-[0.1em] text-black/55`}>
+                                    <div role="columnheader" className="px-3 py-3 xl:px-4">Student</div>
+                                    <div role="columnheader" className="hidden px-3 py-3 xl:block xl:px-4">Matricule</div>
+                                    {weekdays.map((weekday) => {
+                                        const isToday = weekday.value === today;
+                                        return (
+                                            <div
+                                                key={weekday.value}
+                                                role="columnheader"
+                                                className={`min-w-0 px-1 py-3 text-center ${isToday ? "bg-emerald-50 text-emerald-700" : ""}`}
+                                            >
+                                                <div className="xl:hidden">{weekday.dayName.slice(0, 3)}</div>
+                                                <div className="hidden xl:block">{weekday.dayName}</div>
+                                                <div className="mt-1 truncate text-[11px] font-medium normal-case tracking-normal text-black/45">{weekday.shortDate}</div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
 
                                 {classStudents.map((student) => (
-                                    <div key={student.id} className="grid grid-cols-[minmax(190px,2fr)_minmax(120px,1.2fr)_repeat(5,minmax(88px,1fr))] border-b border-stone-200 text-sm last:border-b-0">
-                                        <div className="px-4 py-4">
-                                            <div className="font-semibold text-[#121212]">{student.fullName}</div>
-                                            <div className="text-xs text-black/45">{student.department || "General"}</div>
+                                    <div key={student.id} role="row" className={`${rowGrid} border-b border-stone-200 text-sm last:border-b-0 xl:text-[15px]`}>
+                                        <div role="cell" className="min-w-0 px-3 py-3 xl:px-4 xl:py-4">
+                                            <div className="break-words font-semibold leading-snug text-[#121212] xl:text-base">{student.fullName}</div>
+                                            <div className="mt-0.5 truncate text-xs text-black/45">
+                                                <span className="xl:hidden">{student.matricule || student.admissionNumber || "—"} · </span>
+                                                {student.department || "General"}
+                                            </div>
                                             <button
                                                 type="button"
                                                 onClick={() => downloadAttendanceCertificate(student)}
@@ -705,23 +723,37 @@ export function StudentAttendancePage() {
                                                 Certificate
                                             </button>
                                         </div>
-                                        <div className="px-4 py-4 font-medium text-black/60">
+                                        <div role="cell" className="hidden min-w-0 break-words px-3 py-4 font-medium text-black/60 xl:block xl:px-4">
                                             {student.matricule || student.admissionNumber || "—"}
                                         </div>
                                         {weekdays.map((weekday) => {
                                             const status = attendance[`${student.id}:${weekday.value}`];
                                             const checked = status === "present" || status === "late";
                                             const isFuture = weekday.value > today;
+                                            const isToday = weekday.value === today;
                                             return (
-                                                <label key={weekday.value} className={`flex items-center justify-center border-l border-stone-100 ${isFuture ? "bg-stone-50" : "hover:bg-emerald-50/40"}`}>
+                                                <label
+                                                    key={weekday.value}
+                                                    role="cell"
+                                                    className={`flex min-h-14 items-center justify-center border-l border-stone-100 ${isFuture ? "bg-stone-50" : isToday ? "bg-emerald-50/50 hover:bg-emerald-50" : "hover:bg-emerald-50/40"}`}
+                                                >
                                                     <input
                                                         type="checkbox"
                                                         checked={checked}
                                                         disabled={isFuture || saving}
                                                         aria-label={`${weekday.dayName} ${weekday.shortDate}: ${student.fullName} present`}
                                                         onChange={(event) => handleStatusChange(student.id, weekday.value, event.target.checked ? "present" : "absent")}
-                                                        className="size-5 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-30"
+                                                        className="peer sr-only"
                                                     />
+                                                    <span
+                                                        aria-hidden="true"
+                                                        className={`flex size-7 items-center justify-center rounded-lg border-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500 peer-focus-visible:ring-offset-2 xl:size-8 2xl:size-9 ${checked
+                                                            ? "border-emerald-600 bg-emerald-600 text-white"
+                                                            : "border-stone-300 bg-white text-transparent"
+                                                            } ${isFuture || saving ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
+                                                    >
+                                                        {checked && <Check className="size-4 xl:size-5" strokeWidth={3} />}
+                                                    </span>
                                                 </label>
                                             );
                                         })}
