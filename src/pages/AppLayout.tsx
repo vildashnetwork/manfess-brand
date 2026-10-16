@@ -127,7 +127,7 @@ export function AppLayout() {
             <GraduationCap className="size-4 text-white" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate font-display font-bold uppercase tracking-tight">BCHS DOUALA</div>
+            <div className="truncate font-display font-bold uppercase tracking-tight">MANFESS EVENING SCHOOL</div>
             <div className="truncate text-[10px] text-white/40 uppercase tracking-widest">{t("SCHOOL PORTAL")}</div>
           </div>
           <button
@@ -192,7 +192,7 @@ export function AppLayout() {
               <Menu className="size-5" />
             </button>
             <div className="min-w-0">
-              <div className="truncate text-[10px] font-medium text-black/45 sm:text-xs">BCHS DOUALA · {t("School Portal")}</div>
+              <div className="truncate text-[10px] font-medium text-black/45 sm:text-xs">MANFESS EVENING SCHOOL · {t("School Portal")}</div>
               <div className="truncate text-sm font-semibold">{getPageTitle(pathname)}</div>
             </div>
           </div>
@@ -228,5 +228,5 @@ function getPageTitle(p: string) {
   if (p.startsWith("/app/promotion")) return "Promotion";
   if (p.startsWith("/app/fees")) return "Fees & Finance";
   if (p.startsWith("/app/settings")) return "School Settings";
-  return "BCHS DOUALA";
+  return "MANFESS EVENING SCHOOL";
 }

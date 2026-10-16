@@ -399,7 +399,7 @@ function ReportCardCard({ data, cls, term, sequences, classSize }: { data: any; 
             <div className="size-12 bg-[#155DAA] border-[3px] border-[#d2ad4b] rounded-full grid place-items-center mb-1 text-white text-xs font-black">
               BCHS
             </div>
-            <div className="font-display text-lg font-extrabold tracking-tight text-[#155DAA]">BCHS DOUALA</div>
+            <div className="font-display text-lg font-extrabold tracking-tight text-[#155DAA]">MANFESS EVENING SCHOOL</div>
             <div className="text-[9px] text-stone-500 font-normal normal-case">Excellence · Discipline · Service</div>
           </div>
           <div className="text-right text-[#155DAA] leading-relaxed">
@@ -554,7 +554,7 @@ function ReportCardCard({ data, cls, term, sequences, classSize }: { data: any; 
         </div>
 
         <div className="mt-6 pt-3 border-t-2 border-[#d2ad4b] flex items-center justify-between text-[10px] text-stone-500">
-          <div className="font-semibold text-[#155DAA]">Issued by BCHS DOUALA · {new Date().toLocaleDateString()}</div>
+          <div className="font-semibold text-[#155DAA]">Issued by MANFESS EVENING SCHOOL · {new Date().toLocaleDateString()}</div>
           <div className="font-mono">VERIF#{data.student.id.toUpperCase()}-{term.id.toUpperCase()}</div>
         </div>
       </div>

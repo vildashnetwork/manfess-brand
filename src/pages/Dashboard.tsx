@@ -44,7 +44,7 @@
 //     <div className="space-y-6">
 //       <div>
 //         <h1 className="font-display text-3xl font-extrabold tracking-tight">Welcome back</h1>
-//         <p className="text-sm text-black/60 mt-1">Here's what's happening across BCHS DOUALA today.</p>
+//         <p className="text-sm text-black/60 mt-1">Here's what's happening across MANFESS EVENING SCHOOL DOUALA today.</p>
 //       </div>
 //       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 //         <Kpi icon={Users} label="Total Students" value={data.totalStudents.toLocaleString()} hint="+12% vs last year" />

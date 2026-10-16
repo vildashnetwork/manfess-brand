@@ -104,16 +104,16 @@ export function LoginPage() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(21,93,170,0.25),transparent_60%)]" />
         <Link to="/" className="relative flex items-center gap-2">
           <div className="size-10 bg-brand rounded-lg grid place-items-center"><GraduationCap className="size-5 text-white" /></div>
-          <span className="font-display text-xl font-bold tracking-tight uppercase">BCHS DOUALA</span>
+          <span className="font-display text-xl font-bold tracking-tight uppercase">MANFESS EVENING SCHOOL</span>
         </Link>
         <div className="relative">
           <h2 className="font-display text-4xl font-extrabold leading-tight mb-4">
-            Welcome back to <span className="text-brand">BCHS DOUALA</span>.
+            Welcome back to <span className="text-brand">MANFESS EVENING SCHOOL</span>.
           </h2>
           <p className="text-white/60 max-w-md">Sign in to your portal. Marks, reports and fees — all where you left them.</p>
 
         </div>
-        <p className="relative text-xs text-white/30">© 2026 BCHS DOUALA</p>
+        <p className="relative text-xs text-white/30">© 2026 MANFESS EVENING SCHOOL</p>
       </div>
 
       <div className="flex items-center justify-center p-6 md:p-12">

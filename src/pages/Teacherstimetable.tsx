@@ -773,7 +773,7 @@ export function TeacherTimetableView() {
       if (pdfOptions.includeHeader) {
         htmlContent += `
 <div class="school-header">
-  <h1>BCHS DOUALA</h1>
+  <h1>MANFESS EVENING SCHOOL</h1>
   <p>MOTTO: EDUCATION IS LIGHT</p>
   <p>TEL: +237 677517606 &nbsp;&nbsp;|&nbsp;&nbsp;
    AUT. N°: TECH - 035/24/MINESEC/SG/DESTP/SDSPETP/SSEPTP/07/FEB/2024

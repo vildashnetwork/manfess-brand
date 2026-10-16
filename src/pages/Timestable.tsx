@@ -1738,7 +1738,7 @@ export function TimetableAdminPage() {
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
           <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #155DAA; padding-bottom: 8px;">
-            <h2 style="font-size: 18px; margin: 0; color: #155DAA; font-weight: 800;">BCHS DOUALA</h2>
+            <h2 style="font-size: 18px; margin: 0; color: #155DAA; font-weight: 800;">MANFESS EVENING SCHOOL</h2>
             <p style="font-size: 11px; color: #666; margin: 3px 0;">Timetable • ${academicYear}${filterLabel}</p>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
@@ -1902,7 +1902,7 @@ export function TimetableAdminPage() {
       let htmlContent = `
         <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
           <div style="text-align: center; margin-bottom: 15px; border-bottom: 3px solid #000000; padding-bottom: 12px;">
-            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">BCHS DOUALA</h1>
+            <h1 style="font-size: 20px; margin: 0; color: #000000; font-weight: 800; letter-spacing: 1px;">MANFESS EVENING SCHOOL</h1>
             <p style="font-size: 13px; color: #666; margin: 4px 0 0 0;">TIMETABLE • ${academicYear}</p>
             <p style="font-size: 12px; color: #888; margin: 2px 0 0 0;">Classes: ${classNames || 'All Classes'}</p>
           </div>
@@ -1970,7 +1970,7 @@ export function TimetableAdminPage() {
           <div style="text-align: center; margin-top: 12px; font-size: 9px; color: #000000; border-top: 1px solid #000000; padding-top: 10px;">
             <span>Generated: ${new Date().toLocaleString()}</span>
             <span style="margin: 0 15px;">|</span>
-            <span>BCHS DOUALA</span>
+            <span>MANFESS EVENING SCHOOL</span>
             <span style="margin: 0 15px;">|</span>
             <span>Page 1 of 1</span>
           </div>
@@ -2080,7 +2080,7 @@ export function TimetableAdminPage() {
         container.innerHTML = `
           <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
             <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000; padding-bottom: 8px;">
-              <h2 style="font-size: 18px; margin: 0; color: #000; font-weight: 800;">BCHS DOUALA</h2>
+              <h2 style="font-size: 18px; margin: 0; color: #000; font-weight: 800;">MANFESS EVENING SCHOOL</h2>
               <p style="font-size: 14px; font-weight: 700; color: #000; margin: 4px 0;">CLASS TIMETABLE: ${report.className}</p>
               <p style="font-size: 11px; color: #000; margin: 3px 0;">Academic Year ${academicYear}</p>
             </div>
@@ -2207,7 +2207,7 @@ export function TimetableAdminPage() {
         let htmlContent = `
           <div style="font-family: Arial, sans-serif; background: white; padding: 10px;">
             <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000000; padding-bottom: 8px;">
-              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">BCHS DOUALA</h2>
+              <h2 style="font-size: 18px; margin: 0; color: #000000; font-weight: 800;">MANFESS EVENING SCHOOL</h2>
               <p style="font-size: 11px; font-weight:bold; color: #000000; margin: 3px 0;">Timetable • ${academicYear}${filterLabel} • ${pageLabel}</p>
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 11px;">

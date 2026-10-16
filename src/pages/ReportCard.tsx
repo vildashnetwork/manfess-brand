@@ -566,7 +566,7 @@ export function ReportCard() {
 
     // Header
     doc.setFontSize(16);
-    doc.text("BCHS DOUALA", 105, y, { align: "center" });
+    doc.text("MANFESS EVENING SCHOOL", 105, y, { align: "center" });
     y += 7;
     doc.setFontSize(9);
     doc.text("Republic of Cameroon · Peace — Work — Fatherland", 105, y, { align: "center" });
@@ -639,7 +639,7 @@ export function ReportCard() {
     doc.setFontSize(8);
     doc.text(`Parent: ${data.student.parentName} · Phone: ${data.student.parentPhone}`, 14, finalY + 10);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 14, finalY + 16);
-    doc.text("© 2026 BCHS DOUALA", 105, finalY + 16, { align: "center" });
+    doc.text("© 2026 MANFESS EVENING SCHOOL", 105, finalY + 16, { align: "center" });
   };
 
   const changeTerm = (termId: string) => {
@@ -736,7 +736,7 @@ export function ReportCard() {
                 <div className="size-12 bg-brand rounded-xl grid place-items-center mb-1">
                   <GraduationCap className="size-6 text-white" />
                 </div>
-                <div className="font-display text-base font-extrabold tracking-tight">BCHS DOUALA</div>
+                <div className="font-display text-base font-extrabold tracking-tight">MANFESS EVENING SCHOOL</div>
                 <div className="text-[9px] text-black/60 font-normal">P.O. Box 1234, Yaoundé · MINESEC accredited</div>
               </div>
               <div>
@@ -866,7 +866,7 @@ export function ReportCard() {
             </div>
 
             <div className="mt-6 pt-3 border-t border-stone-300 flex items-center justify-between text-[10px] text-black/40">
-              <div>Issued by BCHS DOUALA · {new Date().toLocaleDateString()}</div>
+              <div>Issued by MANFESS EVENING SCHOOL · {new Date().toLocaleDateString()}</div>
               <div className="font-mono">VERIF#{student.id.toUpperCase()}-{term.id.toUpperCase()}</div>
             </div>
           </div>

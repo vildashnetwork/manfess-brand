@@ -1013,7 +1013,7 @@ export function TeacherSalaryPage() {
 
     let html = `
       <div style="text-align: center; margin-bottom: 25px;">
-        <h1 style="color: #155DAA; font-size: 24px; margin-bottom: 5px;">BCHS DOUALA</h1>
+        <h1 style="color: #155DAA; font-size: 24px; margin-bottom: 5px;">MANFESS EVENING SCHOOL</h1>
         <h2 style="color: #333; font-size: 18px;">Teacher Salary Statement</h2>
         <p style="color: #666; font-size: 14px; margin-top: 5px;">${salary.teacherName}</p>
         <p style="color: #999; font-size: 12px;">${salary.month} ${salary.year}</p>
@@ -1085,7 +1085,7 @@ export function TeacherSalaryPage() {
 
     html += `
       <div style="margin-top: 20px; text-align: center; color: #999; font-size: 11px; border-top: 1px solid #ddd; padding-top: 15px;">
-        <p>Generated on ${new Date().toLocaleString()} • BCHS DOUALA</p>
+        <p>Generated on ${new Date().toLocaleString()} • MANFESS EVENING SCHOOL</p>
         <div style="display: flex; justify-content: space-between; margin-top: 10px;">
           <div style="text-align: center;">
             <div style="border-bottom: 1px solid #333; width: 150px; margin: 0 auto;"></div>
