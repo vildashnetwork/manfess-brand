@@ -331,7 +331,7 @@ export function StudentAttendancePage() {
         doc.setTextColor(...GREEN);
         doc.setFont("times", "bold");
         doc.setFontSize(19);
-        doc.text("M'NDUM FAVOURED EVENING SECONDARY SCHOOL", cx, 31, { align: "center" });
+        doc.text("MANDUM FAVOURED EVENING SECONDARY SCHOOL", cx, 31, { align: "center" });
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8.5);
         doc.setTextColor(...MUTED);

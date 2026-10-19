@@ -47,6 +47,7 @@ interface Subject {
   cycle: string;
   classIds: string[];
   teacherIds: string[];
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
 }
 
 interface Class {
@@ -79,6 +80,17 @@ interface Teacher {
   subjectIds: string[];
   classIds: string[];
   acedemicYear: string;
+}
+
+function teacherAssignedToPair(subject: Subject, teacher: Teacher, classId: string): boolean {
+  if (Array.isArray(subject.classTeacherAssignments) && subject.classTeacherAssignments.length > 0) {
+    return subject.classTeacherAssignments.some(
+      (assignment) => assignment.classId === classId && assignment.teacherIds.includes(teacher.id)
+    );
+  }
+  return subject.classIds.includes(classId) &&
+    teacher.subjectIds.includes(subject.id) &&
+    teacher.classIds.includes(classId);
 }
 
 // Term definitions for Cameroon school system
@@ -334,8 +346,8 @@ export function ReportCardsIndex() {
     return map;
   }, [teachers]);
 
-  const getTeacherNames = (subject: Subject): string => {
-    const marksForSubject = marks.filter((m) => m.subjectId === subject.id);
+  const getTeacherNames = (subject: Subject, forClassId: string): string => {
+    const marksForSubject = marks.filter((m) => m.subjectId === subject.id && m.classId === forClassId);
     const recordedBy = marksForSubject.find((m) => m.recordedBy)?.recordedBy;
     if (recordedBy) {
       const t = teachers.find((tt) => tt.name === recordedBy || tt.id === recordedBy);
@@ -343,8 +355,14 @@ export function ReportCardsIndex() {
       return recordedBy;
     }
 
-    if (subject.teacherIds && subject.teacherIds.length > 0) {
-      const names = subject.teacherIds
+    const classAssignment = subject.classTeacherAssignments?.find(
+      (assignment) => assignment.classId === forClassId
+    );
+    const assignedTeacherIds = subject.classTeacherAssignments?.length
+      ? classAssignment?.teacherIds || []
+      : subject.teacherIds || [];
+    if (assignedTeacherIds.length > 0) {
+      const names = assignedTeacherIds
         .map((id) => teachersMap[id])
         .filter((name) => name !== "—");
       return names.length > 0 ? names.join(", ") : "—";
@@ -355,14 +373,19 @@ export function ReportCardsIndex() {
 
   const allowedClasses = useMemo(() => {
     if (isTeacher && teacher) {
-      return filteredClasses.filter((c) => teacher.classIds?.includes(c.id));
+      return filteredClasses.filter((schoolClass) =>
+        subjects.some((subject) => teacherAssignedToPair(subject, teacher, schoolClass.id))
+      );
     }
     return filteredClasses;
-  }, [filteredClasses, isTeacher, teacher]);
+  }, [filteredClasses, isTeacher, teacher, subjects]);
 
   const classSubjects = useMemo(() => {
-    return subjects.filter((s) => s.classIds.includes(classId));
-  }, [subjects, classId]);
+    return subjects.filter((subject) =>
+      subject.classIds.includes(classId) &&
+      (!isTeacher || !teacher || teacherAssignedToPair(subject, teacher, classId))
+    );
+  }, [subjects, classId, isTeacher, teacher]);
 
   const classStudents = useMemo(() => {
     let filtered = students
@@ -486,7 +509,7 @@ export function ReportCardsIndex() {
           classAvg,
           max,
           min,
-          teacher: getTeacherNames(subject),
+          teacher: getTeacherNames(subject, classId),
           grade: avg > 0 ? gradeFor(avg).grade : "-",
           remark: avg > 0 ? gradeFor(avg).remark : "-",
         });
@@ -766,46 +789,58 @@ export function ReportCardsIndex() {
 
     return `
       <div style="font-family:'Segoe UI',Arial,sans-serif;color:#14352A;max-width:1000px;margin:0 auto;border:1px solid #BFE0CA;border-top:8px solid #15803D;background:#ffffff;">
-        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;text-align:center;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:14px 16px;border-bottom:3px solid #d2ad4b;">
-          <div style="text-align:left;line-height:1.5;color:#15803D;">
+        <div style="display:grid;grid-template-columns:1fr 1.8fr 1fr;gap:12px;align-items:center;text-align:center;padding:12px 16px 10px;border-bottom:3px solid #d2ad4b;">
+          <div style="text-align:left;line-height:1.45;color:#15803D;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">
             République du Cameroun<br/>
             <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Paix — Travail — Patrie</span><br/>
             Ministère des Enseignements Secondaires
           </div>
-          <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-            <div style="width:48px;height:48px;border-radius:50%;background:#15803D;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:12px;font-weight:900;">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding:0 6px;">
+            <div style="width:42px;height:42px;border-radius:50%;background:#15803D;border:3px solid #d2ad4b;display:flex;align-items:center;justify-content:center;margin-bottom:2px;color:#fff;font-size:11px;font-weight:900;">
               MFS
             </div>
-            <div style="font-size:11.5px;font-weight:900;color:#15803D;text-transform:none;text-align:center;line-height:1.25;max-width:260px;">MANDUM FAVOURED EVENING SECONDARY SCHOOL (MANFESS)</div>
-            <div style="font-size:8.5px;color:#6b756d;font-weight:600;text-transform:none;">Excellence · Discipline · Service</div>
+            <div style="font-size:12px;font-weight:900;color:#15803D;text-transform:uppercase;text-align:center;line-height:1.2;">MANDUM FAVOURED EVENING SECONDARY SCHOOL</div>
+            <div style="font-size:8px;color:#000000;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">MANFESS · “Education Is Light”</div>
+           <!-- <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;">
+              Located at Belmon Bilingual High School, 200 meters from rail opposite Royal City, Bonaberi – Douala, Cameroon<br/>
+              Tel. 682 55 35 03 / 652 049 492 / 677 517 606
+            </div>-->
+            <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;">
+              AUT. Nº: GEN- 430/23/MINESEC/SG/DESG/SDSGEPESG/SSGEPES/27/SEPT/2023<br/>
+              AUT. Nº: TECH - 035/24/MINESEC/SG/DESTP/SDSPETP/SSEPTP/07/FEB/2024
+            </div>
           </div>
-          <div style="text-align:right;line-height:1.5;color:#15803D;">
+          <div style="text-align:right;line-height:1.45;color:#15803D;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">
             Republic of Cameroon<br/>
             <span style="font-weight:600;font-style:italic;text-transform:none;color:#6b756d;">Peace — Work — Fatherland</span><br/>
             Ministry of Secondary Education
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 16px;padding:10px 14px;background:#E8F5EC;border-left:5px solid #15803D;">
-          <div style="font-size:17px;font-weight:800;color:#15803D;text-transform:uppercase;">${ctx.title} Report</div>
-          <div style="text-align:right;font-size:10px;font-weight:700;color:#52665a;">ACADEMIC YEAR<br/><span style="font-size:13px;color:#183328;">${escapeHtml(ctx.academicYear)}</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 16px;padding:9px 14px;background:#E8F5EC;border-left:5px solid #15803D;border-radius:0 6px 6px 0;">
+          <div style="font-size:16px;font-weight:800;color:#15803D;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(ctx.title)} Report</div>
+          <div style="text-align:right;font-size:8px;font-weight:800;color:#52665a;letter-spacing:0.08em;">ACADEMIC YEAR<br/><span style="font-size:12px;color:#183328;letter-spacing:0;">${escapeHtml(ctx.academicYear)}</span></div>
         </div>
 
-        <div style="display:grid;grid-template-columns:116px 1fr;gap:14px;margin:0 16px 14px;padding:12px;border:1px solid #BFE0CA;border-radius:8px;background:#fff;">
-          <div style="width:116px;height:142px;overflow:hidden;border:2px solid #d2ad4b;border-radius:6px;background:#E8F5EC;">${portrait}</div>
-          <div>
-            <div style="font-size:18px;font-weight:800;color:#15803D;margin-bottom:8px;">${escapeHtml(studentName)}</div>
-            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;font-size:10px;">
-              <div><b style="color:#718076;">MATRICULE</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(matricule)}</span></div>
-              <div><b style="color:#718076;">CLASS</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(ctx.selectedClass?.className || "")}</span></div>
-              <div><b style="color:#718076;">DEPARTMENT</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.department || ctx.selectedClass?.department || "—")}</span></div>
-              <div><b style="color:#718076;">GENDER</b><br/><span style="font-weight:700;color:#183328;">${data.student.gender === "male" ? "Male" : "Female"}</span></div>
-              <div><b style="color:#718076;">DATE OF BIRTH</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.dob || "—")}</span></div>
-              <div><b style="color:#718076;">POSITION</b><br/><span style="font-weight:700;color:#183328;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</span></div>
-              <div><b style="color:#718076;">PARENT / GUARDIAN</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.parentName || "—")}</span></div>
-              <div><b style="color:#718076;">CONTACT</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.parentPhone || "—")}</span></div>
-              <div><b style="color:#718076;">CLASS SIZE</b><br/><span style="font-weight:700;color:#183328;">${ctx.classSize} learners</span></div>
-              <div style="grid-column:1 / -1;"><b style="color:#718076;">ADDRESS</b><br/><span style="font-weight:700;color:#183328;">${escapeHtml(data.student.address || "—")}</span></div>
+        <div style="display:grid;grid-template-columns:92px 1fr;gap:12px;margin:0 16px 14px;padding:10px;border:1px solid #BFE0CA;border-radius:8px;background:#fff;">
+          <div style="width:92px;height:112px;overflow:hidden;border:2px solid #d2ad4b;border-radius:6px;background:#E8F5EC;">${portrait}</div>
+          <div style="min-width:0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid #E4EEE7;">
+              <div style="font-size:17px;font-weight:800;color:#15803D;line-height:1.2;">${escapeHtml(studentName)}</div>
+              <div style="flex-shrink:0;padding:4px 7px;border-radius:4px;background:#E8F5EC;font-size:8px;font-weight:800;color:#52665a;">MATRICULE: ${escapeHtml(matricule)}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">CLASS</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(ctx.selectedClass?.className || "—")}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">DEPARTMENT</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(data.student.department || ctx.selectedClass?.department || "—")}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">GENDER</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${/^(m|male)$/i.test(data.student.gender || "") ? "Male" : /^(f|female)$/i.test(data.student.gender || "") ? "Female" : "—"}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">DATE OF BIRTH</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(data.student.dob || "—")}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">POSITION</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${data.rank ? `${ordinal(data.rank)} / ${ctx.classSize}` : "—"}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">CLASS SIZE</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${ctx.classSize} learners</div></div>
+              <!--
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">PARENT / GUARDIAN</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(data.student.parentName || "—")}</div></div>
+              <div style="padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">CONTACT</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(data.student.parentPhone || "—")}</div></div>
+              -->
+              <div style="grid-column:1 / -1;padding:5px 6px;background:#F6F9F7;border-radius:4px;"><div style="font-size:7px;font-weight:800;color:#718076;letter-spacing:0.06em;">ADDRESS</div><div style="margin-top:2px;font-size:9px;font-weight:700;color:#183328;">${escapeHtml(data.student.address || "—")}</div></div>
             </div>
           </div>
         </div>

@@ -19,6 +19,7 @@ interface Subject {
   periodsByClass: Record<string, number>;
   classIds: string[];
   teacherIds: string[];
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
 }
 
 interface SchoolClass {
@@ -160,7 +161,8 @@ export function ClassesPage() {
           periodsPerWeek: s.periodsPerWeek ?? 4,
           periodsByClass: s.periodsByClass || {},
           classIds: s.classIds || [],
-          teacherIds: s.teacherIds || []
+          teacherIds: s.teacherIds || [],
+          classTeacherAssignments: s.classTeacherAssignments
         }));
         setSubjects(mappedSubjects);
       }
@@ -252,8 +254,15 @@ export function ClassesPage() {
         periodsPerWeek: Math.max(1, Math.min(20, Number(subject.periodsPerWeek) || 4)),
         periodsByClass,
         classIds: subject.classIds || [],
-        teacherIds: subject.teacherIds || []
+        teacherIds: subject.teacherIds || [],
+        classTeacherAssignments: (subject.classTeacherAssignments || [])
+          .filter((assignment) => subject.classIds.includes(assignment.classId))
+          .map((assignment) => ({
+            classId: assignment.classId,
+            teacherIds: [...new Set(assignment.teacherIds || [])]
+          }))
       };
+      subjectData.teacherIds = [...new Set(subjectData.classTeacherAssignments.flatMap((assignment) => assignment.teacherIds))];
 
       console.log("Subject data to save:", subjectData);
 
@@ -724,7 +733,8 @@ export function ClassesPage() {
             periodsPerWeek: 4,
             periodsByClass: {},
             classIds: [],
-            teacherIds: []
+            teacherIds: [],
+            classTeacherAssignments: []
           }}
           classes={classes}
           teachers={teachers}
@@ -773,7 +783,13 @@ function SubjectDialog({
   onSave: (s: Subject) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState<Subject>(initial);
+  const [form, setForm] = useState<Subject>(() => ({
+    ...initial,
+    classTeacherAssignments: initial.classTeacherAssignments ?? initial.classIds.map((classId) => ({
+      classId,
+      teacherIds: [...(initial.teacherIds || [])]
+    }))
+  }));
   const [saving, setSaving] = useState(false);
 
   const set = <K extends keyof Subject>(k: K, v: Subject[K]) =>
@@ -785,12 +801,17 @@ function SubjectDialog({
   const toggleClass = (id: string) => {
     if (form.classIds.includes(id)) {
       set("classIds", form.classIds.filter((x) => x !== id));
+      set("classTeacherAssignments", (form.classTeacherAssignments || []).filter((assignment) => assignment.classId !== id));
       // Drop the override so unassigned classes never carry stale data.
       const next = { ...form.periodsByClass };
       delete next[id];
       set("periodsByClass", next);
     } else {
       set("classIds", [...form.classIds, id]);
+      set("classTeacherAssignments", [
+        ...(form.classTeacherAssignments || []),
+        { classId: id, teacherIds: [] }
+      ]);
     }
   };
 
@@ -800,11 +821,19 @@ function SubjectDialog({
       [classId]: Math.max(1, Math.min(20, Number(value) || 1)),
     });
 
-  const toggleTeacher = (id: string) =>
-    set("teacherIds", form.teacherIds.includes(id)
-      ? form.teacherIds.filter((x) => x !== id)
-      : [...form.teacherIds, id]
-    );
+  const toggleClassTeacher = (classId: string, teacherId: string) => {
+    const assignments = form.classTeacherAssignments || [];
+    const existing = assignments.find((assignment) => assignment.classId === classId);
+    const currentTeacherIds = existing?.teacherIds || [];
+    const teacherIds = currentTeacherIds.includes(teacherId)
+      ? currentTeacherIds.filter((id) => id !== teacherId)
+      : [...currentTeacherIds, teacherId];
+
+    set("classTeacherAssignments", [
+      ...assignments.filter((assignment) => assignment.classId !== classId),
+      { classId, teacherIds }
+    ]);
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -908,51 +937,52 @@ function SubjectDialog({
           </div>
 
           {form.classIds.length > 0 && (
-            <div className="mt-3 space-y-2">
+            <div className="mt-3 space-y-3">
               <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Periods per week by class</div>
               {sectionClasses
                 .filter((c) => form.classIds.includes(c.id))
                 .map((c) => (
-                  <div key={c.id} className="flex items-center justify-between gap-3 bg-stone-50 rounded-lg px-3 py-2">
-                    <span className="text-xs font-semibold text-black/70">{c.className + " " + c.department}</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={form.periodsByClass[c.id] ?? form.periodsPerWeek ?? 4}
-                        onChange={(e) => setClassPeriods(c.id, Number(e.target.value))}
-                        className="w-16 px-2 py-1 rounded-lg border border-stone-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-brand/30"
-                      />
-                      <span className="text-[10px] text-black/40">/ week</span>
+                  <div key={c.id} className="rounded-lg bg-stone-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-semibold text-black/70">{c.className + " " + c.department}</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={form.periodsByClass[c.id] ?? form.periodsPerWeek ?? 4}
+                          onChange={(e) => setClassPeriods(c.id, Number(e.target.value))}
+                          className="w-16 px-2 py-1 rounded-lg border border-stone-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-brand/30"
+                        />
+                        <span className="text-[10px] text-black/40">/ week</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {sectionTeachers.map((teacher) => {
+                        const selected = (form.classTeacherAssignments || [])
+                          .find((assignment) => assignment.classId === c.id)
+                          ?.teacherIds.includes(teacher.id) ?? false;
+                        return (
+                          <button
+                            key={teacher.id}
+                            type="button"
+                            onClick={() => toggleClassTeacher(c.id, teacher.id)}
+                            className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${selected
+                              ? "border-brand bg-brand text-white"
+                              : "border-stone-200 text-black/60 hover:bg-white"
+                              }`}
+                          >
+                            {teacher.fullName}
+                          </button>
+                        );
+                      })}
+                      {sectionTeachers.length === 0 && <span className="text-[10px] text-black/40">No teachers available</span>}
                     </div>
                   </div>
                 ))}
-              <p className="text-[11px] text-black/40">Leave a class untouched to use the default periods per week.</p>
+              <p className="text-[11px] text-black/40">Choose teachers separately for each class. Leave a class untouched to use the default periods per week.</p>
             </div>
           )}
-        </div>
-
-        <div className="mt-4">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-black/50 mb-2">Assigned Teachers</div>
-          <div className="flex flex-wrap gap-2">
-            {sectionTeachers.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => toggleTeacher(t.id)}
-                className={`text-xs px-3 py-1.5 rounded-full font-bold border ${form.teacherIds.includes(t.id)
-                  ? "bg-brand text-white border-brand"
-                  : "border-stone-200 text-black/60 hover:bg-stone-50"
-                  }`}
-              >
-                {t.fullName}
-              </button>
-            ))}
-            {sectionTeachers.length === 0 && (
-              <span className="text-xs text-black/40">No teachers available</span>
-            )}
-          </div>
         </div>
 
         <div className="flex justify-end gap-2 mt-6">

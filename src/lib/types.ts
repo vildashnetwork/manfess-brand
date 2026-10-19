@@ -62,6 +62,7 @@ export interface Subject {
   coefficient: number;
   classIds: string[]; // taught in these classes
   teacherIds?: string[]; // teachers responsible for this subject (per-subject)
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
 }
 
 export interface Mark {

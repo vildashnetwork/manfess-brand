@@ -37,6 +37,9 @@ interface Subject {
   name: string;
   code: string;
   section: "englophone";
+  classIds: string[];
+  teacherIds: string[];
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
 }
 
 interface Class {
@@ -113,7 +116,10 @@ export function TeachersPage() {
           id: subj._id || subj.id,
           name: subj.name,
           code: subj.code,
-          section: subj.section || "englophone"
+          section: subj.section || "englophone",
+          classIds: subj.classIds || [],
+          teacherIds: subj.teacherIds || [],
+          classTeacherAssignments: subj.classTeacherAssignments
         }));
         setSubjects(mappedSubjects);
         console.log("📚 Subjects loaded:", mappedSubjects);
@@ -299,8 +305,24 @@ export function TeachersPage() {
           </div>
         ) : (
           filteredTeachers.map((t) => {
-            const teacherSubjects = subjects.filter((s) => t.subjectIds.includes(s.id));
-            const teacherClasses = classes.filter((c) => t.classIds.includes(c.id));
+            const teacherSubjects = subjects.filter((subject) =>
+              subject.classTeacherAssignments?.length
+                ? subject.classTeacherAssignments.some((assignment) => assignment.teacherIds.includes(t.id))
+                : subject.teacherIds.includes(t.id) || t.subjectIds.includes(subject.id)
+            );
+            const teacherClasses = classes.filter((schoolClass) =>
+              subjects.some((subject) => {
+                if (!subject.classIds.includes(schoolClass.id)) return false;
+                if (subject.classTeacherAssignments?.length) {
+                  return subject.classTeacherAssignments.some(
+                    (assignment) =>
+                      assignment.classId === schoolClass.id && assignment.teacherIds.includes(t.id)
+                  );
+                }
+                return (subject.teacherIds.includes(t.id) || t.subjectIds.includes(subject.id)) &&
+                  t.classIds.includes(schoolClass.id);
+              })
+            );
             return (
               <div key={t.id} className="min-w-0 rounded-2xl border border-stone-200 bg-white p-4 transition-shadow hover:shadow-md sm:p-5">
                 <div className="flex items-center gap-3 mb-4">
@@ -569,6 +591,9 @@ function TeacherDialog({
         {(isEditing || step === 2) && (
           <section className="mt-4 space-y-5">
             {!isEditing && <h4 className="font-display font-bold">Subject and class assignments</h4>}
+          <p className="text-xs text-black/50">
+            To assign a teacher to a specific subject in selected classes, configure the class-by-class assignment under Classes &gt; Subjects.
+          </p>
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-bold text-black/50">Subjects (Select Multiple)</div>

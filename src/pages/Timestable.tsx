@@ -152,6 +152,7 @@ interface Subject {
   // Returned by GET /api/subjects — used by the generator readiness check.
   classIds?: string[];
   teacherIds?: string[];
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
 }
 
 interface SchoolSettings {
@@ -3376,11 +3377,8 @@ function GenerateTab({
 }) {
   const [showPlan, setShowPlan] = useState(false);
 
-  // Pre-flight check — mirrors the backend generator's eligibility rule
-  // (routes/timetable.js): a teacher only gets periods for a (subject, class)
-  // pair when the Subject lists that class AND the teacher's subjectIds AND
-  // classIds both include the pair. Being "permanent" (Step 1) only makes a
-  // teacher AVAILABLE — it never creates assignments.
+  // Pre-flight check mirrors the backend: explicit class-level assignments
+  // take precedence; legacy subjects still use teacher subject/class lists.
   const readiness = useMemo(() => {
     return teachers.map((t) => {
       let assignments = 0;
@@ -3392,8 +3390,12 @@ function GenerateTab({
         classes.forEach((c) => {
           const classId = String(c._id);
           if (!subjClassIds.includes(classId)) return;
-          if (!tClassIds.includes(classId)) return;
-          if (!tSubjectIds.includes(String(s._id))) return;
+          if (Array.isArray(s.classTeacherAssignments) && s.classTeacherAssignments.length > 0) {
+            const assignment = s.classTeacherAssignments.find((item) => String(item.classId) === classId);
+            if (!assignment?.teacherIds.map(String).includes(String(t._id))) return;
+          } else if (!tClassIds.includes(classId) || !tSubjectIds.includes(String(s._id))) {
+            return;
+          }
           assignments += 1;
           weeklyPeriods += s.periodsByClass?.[classId] ?? s.periodsPerWeek ?? 4;
         });
@@ -4408,10 +4410,11 @@ interface SubjectFormState {
   periodsByClass: Record<string, number>;
   classIds: string[];
   teacherIds: string[];
+  classTeacherAssignments: { classId: string; teacherIds: string[] }[];
 }
 
 const emptySubjectForm = (): SubjectFormState => ({
-  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, periodsByClass: {}, classIds: [], teacherIds: [],
+  name: "", code: "", coefficient: 1, cycle: "1st Cycle", periodsPerWeek: 4, periodsByClass: {}, classIds: [], teacherIds: [], classTeacherAssignments: [],
 });
 
 function SubjectsManagerModal({
@@ -4456,7 +4459,28 @@ function SubjectsManagerModal({
       return {
         ...prev,
         classIds: has ? prev.classIds.filter((c) => c !== classId) : [...prev.classIds, classId],
+        classTeacherAssignments: has
+          ? prev.classTeacherAssignments.filter((assignment) => assignment.classId !== classId)
+          : [...prev.classTeacherAssignments, { classId, teacherIds: [] }],
         periodsByClass,
+      };
+    });
+  };
+
+  const toggleClassTeacher = (classId: string, teacherId: string) => {
+    setForm((prev) => {
+      if (!prev) return prev;
+      const assignment = prev.classTeacherAssignments.find((item) => item.classId === classId);
+      const currentTeacherIds = assignment?.teacherIds || [];
+      const teacherIds = currentTeacherIds.includes(teacherId)
+        ? currentTeacherIds.filter((id) => id !== teacherId)
+        : [...currentTeacherIds, teacherId];
+      return {
+        ...prev,
+        classTeacherAssignments: [
+          ...prev.classTeacherAssignments.filter((item) => item.classId !== classId),
+          { classId, teacherIds },
+        ],
       };
     });
   };
@@ -4485,6 +4509,15 @@ function SubjectsManagerModal({
       periodsByClass: { ...(s.periodsByClass || {}) },
       classIds: (s.classIds || []).map(String),
       teacherIds: (s.teacherIds || []).map(String),
+      classTeacherAssignments: Array.isArray(s.classTeacherAssignments)
+        ? s.classTeacherAssignments.map((assignment) => ({
+          classId: String(assignment.classId),
+          teacherIds: (assignment.teacherIds || []).map(String),
+        }))
+        : (s.classIds || []).map((classId) => ({
+          classId: String(classId),
+          teacherIds: (s.teacherIds || []).map(String),
+        })),
     });
   };
 
@@ -4504,6 +4537,8 @@ function SubjectsManagerModal({
           periodsByClass[cid] = Math.max(1, Math.min(20, Math.floor(override)));
         }
       });
+      const classTeacherAssignments = form.classTeacherAssignments
+        .filter((assignment) => form.classIds.includes(assignment.classId));
       const payload = {
         name: form.name.trim(),
         code: form.code.trim().toUpperCase(),
@@ -4512,7 +4547,8 @@ function SubjectsManagerModal({
         periodsPerWeek: Math.max(1, Math.min(20, Number(form.periodsPerWeek) || 4)),
         periodsByClass,
         classIds: form.classIds,
-        teacherIds: form.teacherIds,
+        classTeacherAssignments,
+        teacherIds: [...new Set(classTeacherAssignments.flatMap((assignment) => assignment.teacherIds))],
       };
       const res = form._id
         ? await axios.put(`${API_BASE}/subjects/${form._id}`, payload)
@@ -4612,31 +4648,43 @@ function SubjectsManagerModal({
                   <p className="text-[11px] text-black/40">Leave a class untouched to use the default periods per week.</p>
                 </div>
               )}
-              <div className="sm:col-span-2">
-                <Field label="Assigned Teachers">
-                  <div className="flex flex-wrap gap-2">
-                    {teachers.map((teacher) => {
-                      const teacherId = String(teacher._id);
-                      const checked = form.teacherIds.includes(teacherId);
-                      return (
-                        <button
-                          key={teacherId}
-                          type="button"
-                          onClick={() => setForm({
-                            ...form,
-                            teacherIds: checked
-                              ? form.teacherIds.filter((id) => id !== teacherId)
-                              : [...form.teacherIds, teacherId],
-                          })}
-                          className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-stone-100 text-black/40 hover:bg-stone-200"}`}
-                        >
-                          {teacher.name || teacher.fullName || "Unnamed teacher"}
-                        </button>
-                      );
-                    })}
+              {form.classIds.length > 0 && (
+                <div className="sm:col-span-2">
+                <Field label="Teachers for each class">
+                  <p className="mb-2 text-[11px] text-black/40">A teacher selected for one class is not automatically assigned to other classes.</p>
+                  <div className="space-y-2">
+                    {classes
+                      .filter((schoolClass) => form.classIds.includes(String(schoolClass._id)))
+                      .map((schoolClass) => {
+                        const classId = String(schoolClass._id);
+                        const assignedTeacherIds = form.classTeacherAssignments
+                          .find((assignment) => assignment.classId === classId)?.teacherIds || [];
+                        return (
+                          <div key={classId} className="rounded-lg bg-stone-50 px-3 py-2">
+                            <div className="mb-2 text-xs font-semibold text-black/70">{classLabel(schoolClass)}</div>
+                            <div className="flex flex-wrap gap-2">
+                              {teachers.map((teacher) => {
+                                const teacherId = String(teacher._id);
+                                const checked = assignedTeacherIds.includes(teacherId);
+                                return (
+                                  <button
+                                    key={teacherId}
+                                    type="button"
+                                    onClick={() => toggleClassTeacher(classId, teacherId)}
+                                    className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${checked ? "bg-brand text-white" : "bg-white text-black/50 border border-stone-200 hover:bg-stone-100"}`}
+                                  >
+                                    {teacher.name || teacher.fullName || "Unnamed teacher"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
                   </div>
                 </Field>
-              </div>
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-stone-100">
               <button onClick={() => setForm(null)} disabled={saving} className="px-4 py-2.5 rounded-xl border border-stone-200 text-sm font-semibold hover:bg-stone-50 transition">
@@ -4705,7 +4753,7 @@ function SubjectsManagerModal({
               </table>
             </div>
             <p className="text-xs text-amber-600 mt-3">
-              💡 Teachers also need matching subject & class assignments (Teachers page) to be scheduled for these periods by the auto-generator.
+              Teachers are scheduled only for the specific classes selected in their subject assignments, subject to their availability.
             </p>
           </>
         )}

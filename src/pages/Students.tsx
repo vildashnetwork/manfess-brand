@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Search, Plus, Trash2, Pencil, Filter, Download, FileText, Printer, Camera, ImagePlus, Upload, X, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Search, Plus, Trash2, Pencil, Filter, Download, FileText, Printer, Camera, RefreshCw, ImagePlus, Upload, X, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { CompactPageLoader } from "@/components/CompactPageLoader";
 import { getStoredSchoolSection } from "@/lib/schoolSystem";
 import { toast } from "sonner";
@@ -955,6 +955,8 @@ export function StudentDialog({
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState(0);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraFacingMode, setCameraFacingMode] = useState<"user" | "environment">("user");
+  const [cameraSwitching, setCameraSwitching] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -995,18 +997,36 @@ export function StudentDialog({
     setCameraStream(null);
   };
 
-  const startCamera = async () => {
+  const startCamera = async (facingMode: "user" | "environment" = cameraFacingMode) => {
     setCameraError("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Camera access is unavailable. Use HTTPS or localhost, or upload a photo instead.");
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } }, audio: false });
       setCameraStream(stream);
+      setCameraFacingMode(facingMode);
     } catch (error) {
       console.error("Unable to open student photo camera:", error);
-      setCameraError("Camera permission was denied or no camera was found. You can upload a photo instead.");
+      setCameraError(
+        facingMode !== cameraFacingMode
+          ? "Could not switch cameras. Your device may not have another camera available."
+          : "Camera permission was denied or no camera was found. You can upload a photo instead."
+      );
+    }
+  };
+
+  const switchCamera = async () => {
+    const nextFacingMode = cameraFacingMode === "user" ? "environment" : "user";
+    setCameraSwitching(true);
+    setCameraError("");
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    setCameraStream(null);
+    try {
+      await startCamera(nextFacingMode);
+    } finally {
+      setCameraSwitching(false);
     }
   };
 
@@ -1272,6 +1292,10 @@ export function StudentDialog({
                   <>
                     <button type="button" onClick={capturePhoto} className="flex items-center justify-center gap-2 rounded-lg bg-brand px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand/90">
                       <Camera className="size-4" /> Take photo
+                    </button>
+                    <button type="button" onClick={() => void switchCamera()} disabled={cameraSwitching} className="flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50 disabled:cursor-wait disabled:opacity-60">
+                      {cameraSwitching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                      Switch to {cameraFacingMode === "user" ? "back" : "front"} camera
                     </button>
                     <button type="button" onClick={stopCamera} className="flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50">
                       <X className="size-4" /> Stop camera

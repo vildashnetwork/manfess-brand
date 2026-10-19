@@ -32,6 +32,18 @@ interface Subject {
   cycle: string;
   classIds: string[];
   teacherIds: string[];
+  classTeacherAssignments?: { classId: string; teacherIds: string[] }[];
+}
+
+function teacherAssignedToPair(subject: Subject, teacher: Teacher, classId: string): boolean {
+  if (Array.isArray(subject.classTeacherAssignments) && subject.classTeacherAssignments.length > 0) {
+    return subject.classTeacherAssignments.some(
+      (assignment) => assignment.classId === classId && assignment.teacherIds.includes(teacher.id)
+    );
+  }
+  return subject.classIds.includes(classId) &&
+    teacher.subjectIds.includes(subject.id) &&
+    teacher.classIds.includes(classId);
 }
 
 interface Class {
@@ -189,17 +201,26 @@ export function MarkEntry() {
   const allowedClasses = useMemo(() => {
     if (!isTeacher) return classes;
     if (!teacher) return [];
-    return classes.filter((c) => teacher.classIds.includes(c.id));
-  }, [isTeacher, teacher, classes]);
+    return classes.filter((schoolClass) =>
+      subjects.some((subject) => teacherAssignedToPair(subject, teacher, schoolClass.id))
+    );
+  }, [isTeacher, teacher, classes, subjects]);
 
   // Filter subjects for teacher
   const allowedSubjects = useMemo(() => {
     let subs = subjects;
     if (isTeacher && teacher) {
-      subs = subs.filter((s) => teacher.subjectIds.includes(s.id));
+      subs = subs.filter((subject) =>
+        subject.classIds.some((assignedClassId) =>
+          teacherAssignedToPair(subject, teacher, assignedClassId)
+        )
+      );
     }
     if (classId) {
-      subs = subs.filter((s) => s.classIds.includes(classId));
+      subs = subs.filter((subject) => {
+        if (!subject.classIds.includes(classId)) return false;
+        return !isTeacher || !teacher || teacherAssignedToPair(subject, teacher, classId);
+      });
     }
     return subs;
   }, [subjects, isTeacher, teacher, classId]);
