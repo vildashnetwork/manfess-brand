@@ -152,6 +152,33 @@ function ordinal(n: number): string {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+function addReportCardToPage(pdf: jsPDF, canvas: HTMLCanvasElement) {
+  if (canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error("Report card image is empty");
+  }
+
+  const margin = 5;
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const availableWidth = pageWidth - margin * 2;
+  const availableHeight = pageHeight - margin * 2;
+  const scale = Math.min(availableWidth / canvas.width, availableHeight / canvas.height);
+  const imageWidth = canvas.width * scale;
+  const imageHeight = canvas.height * scale;
+  if (![scale, imageWidth, imageHeight].every(Number.isFinite) || scale <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+    throw new Error("Report card cannot be scaled to fit the PDF page");
+  }
+
+  pdf.addImage(
+    canvas.toDataURL("image/jpeg", 0.95),
+    "JPEG",
+    (pageWidth - imageWidth) / 2,
+    (pageHeight - imageHeight) / 2,
+    imageWidth,
+    imageHeight
+  );
+}
+
 export function ReportCardsIndex() {
   const navigate = useNavigate();
   const user = currentUser();
@@ -572,8 +599,9 @@ export function ReportCardsIndex() {
       container.style.left = '-9999px';
       container.style.top = '0';
       container.style.width = '800px';
+      container.style.boxSizing = 'border-box';
       container.style.backgroundColor = 'white';
-      container.style.padding = '40px';
+      container.style.padding = '0';
       container.style.zIndex = '9999';
       document.body.appendChild(container);
 
@@ -599,13 +627,18 @@ export function ReportCardsIndex() {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const canvas = await html2canvas(container, {
+      const reportCard = container.firstElementChild;
+      if (!(reportCard instanceof HTMLElement)) {
+        throw new Error("Report card content was not rendered");
+      }
+
+      const canvas = await html2canvas(reportCard, {
         scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: false,
-        width: 800,
-        height: container.scrollHeight,
+        width: reportCard.scrollWidth,
+        height: reportCard.scrollHeight,
       });
 
       const pdf = new jsPDF({
@@ -614,12 +647,7 @@ export function ReportCardsIndex() {
         orientation: 'portrait',
       });
 
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdfWidth = 210;
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      const margin = 10;
-
-      pdf.addImage(imgData, 'JPEG', margin, margin, pdfWidth - margin * 2, pdfHeight - margin * 2);
+      addReportCardToPage(pdf, canvas);
 
       document.body.removeChild(container);
 
@@ -663,8 +691,9 @@ export function ReportCardsIndex() {
         container.style.left = '-9999px';
         container.style.top = '0';
         container.style.width = '800px';
+        container.style.boxSizing = 'border-box';
         container.style.backgroundColor = 'white';
-        container.style.padding = '40px';
+        container.style.padding = '0';
         container.style.zIndex = '9999';
         document.body.appendChild(container);
 
@@ -682,27 +711,26 @@ export function ReportCardsIndex() {
 
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        const canvas = await html2canvas(container, {
+        const reportCard = container.firstElementChild;
+        if (!(reportCard instanceof HTMLElement)) {
+          throw new Error("Report card content was not rendered");
+        }
+
+        const canvas = await html2canvas(reportCard, {
           scale: 2,
           useCORS: true,
           backgroundColor: '#ffffff',
           logging: false,
-          width: 800,
-          height: container.scrollHeight,
+          width: reportCard.scrollWidth,
+          height: reportCard.scrollHeight,
         });
-
-        document.body.removeChild(container);
 
         if (i > 0) {
           pdf.addPage();
         }
 
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        const pdfWidth = 210;
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        const margin = 10;
-
-        pdf.addImage(imgData, 'JPEG', margin, margin, pdfWidth - margin * 2, pdfHeight - margin * 2);
+        addReportCardToPage(pdf, canvas);
+        document.body.removeChild(container);
       }
 
       pdf.save(`report_cards_${selectedClass?.className}_${selectedTerm}.pdf`);
@@ -802,16 +830,16 @@ export function ReportCardsIndex() {
             </div>
             <div style="font-size:12px;font-weight:900;color:#15803D;text-transform:uppercase;text-align:center;line-height:1.2;">MANDUM FAVOURED EVENING SECONDARY SCHOOL</div>
             <div style="font-size:8px;color:#000000;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">MANFESS · “Education Is Light”</div>
-           <!-- <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;">
+           <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;">
               Located at Belmon Bilingual High School, 200 meters from rail opposite Royal City, Bonaberi – Douala, Cameroon<br/>
               Tel. 682 55 35 03 / 652 049 492 / 677 517 606
-            </div>-->
-              <!-- 
+            </div>
+              
             <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;">
               AUT. Nº: GEN- 430/23/MINESEC/SG/DESG/SDSGEPESG/SSGEPES/27/SEPT/2023<br/>
               AUT. Nº: TECH - 035/24/MINESEC/SG/DESTP/SDSPETP/SSEPTP/07/FEB/2024
             </div>
-            -->
+           
           </div>
           <div style="text-align:right;line-height:1.45;color:#15803D;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">
             Republic of Cameroon<br/>
