@@ -153,29 +153,48 @@ function ordinal(n: number): string {
 }
 
 function addReportCardToPage(pdf: jsPDF, canvas: HTMLCanvasElement) {
-  if (canvas.width <= 0 || canvas.height <= 0) {
+  if (!Number.isFinite(canvas.width) || !Number.isFinite(canvas.height) || canvas.width <= 0 || canvas.height <= 0) {
     throw new Error("Report card image is empty");
   }
 
   const margin = 5;
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
+  const unitScale = pdf.internal.scaleFactor;
   const availableWidth = pageWidth - margin * 2;
   const availableHeight = pageHeight - margin * 2;
   const scale = Math.min(availableWidth / canvas.width, availableHeight / canvas.height);
   const imageWidth = canvas.width * scale;
   const imageHeight = canvas.height * scale;
-  if (![scale, imageWidth, imageHeight].every(Number.isFinite) || scale <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+  const imageX = (pageWidth - imageWidth) / 2;
+  const imageY = (pageHeight - imageHeight) / 2;
+  if (
+    ![pageWidth, pageHeight, unitScale, availableWidth, availableHeight, scale, imageX, imageY, imageWidth, imageHeight]
+      .every(Number.isFinite) ||
+    unitScale <= 0 ||
+    scale <= 0 ||
+    imageX < 0 ||
+    imageY < 0 ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
     throw new Error("Report card cannot be scaled to fit the PDF page");
   }
 
+  const imageData = canvas.toDataURL("image/jpeg", 0.95);
+  if (!imageData.startsWith("data:image/jpeg;base64,")) {
+    throw new Error("Could not encode report card image for PDF");
+  }
+
   pdf.addImage(
-    canvas.toDataURL("image/jpeg", 0.95),
+    imageData,
     "JPEG",
-    (pageWidth - imageWidth) / 2,
-    (pageHeight - imageHeight) / 2,
+    imageX,
+    imageY,
     imageWidth,
-    imageHeight
+    imageHeight,
+    undefined,
+    "FAST"
   );
 }
 

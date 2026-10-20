@@ -8,6 +8,29 @@ import jsPDF from "jspdf";
 import "jspdf-autotable";
 
 const API_BASE = import.meta.env.VITE_API_URL;
+const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "dbq5gkepx";
+const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "vildash";
+
+async function uploadStudentPhotoToCloudinary(imageData: string): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", imageData);
+  formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+
+  try {
+    const response = await axios.post<{ secure_url?: string; error?: { message?: string } }>(
+      `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
+      formData
+    );
+    const secureUrl = response.data.secure_url;
+    if (!secureUrl?.startsWith("https://")) {
+      throw new Error("Cloudinary did not return a secure photo URL");
+    }
+    return secureUrl;
+  } catch (error: any) {
+    const message = error.response?.data?.error?.message || error.message || "Cloudinary photo upload failed";
+    throw new Error(message);
+  }
+}
 
 // Types
 export interface Student {
@@ -958,6 +981,7 @@ export function StudentDialog({
   const [cameraFacingMode, setCameraFacingMode] = useState<"user" | "environment">("user");
   const [cameraSwitching, setCameraSwitching] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const steps = ["Student", "Class & fees", "Family", "Photo", "Review"];
@@ -990,6 +1014,23 @@ export function StudentDialog({
       registrationFeeAmount: classObj?.registrationFeeRequired ? classObj.registrationFeeAmount : 0,
       feesDue: Math.max(0, totalFee - (Number(current.feesPaid) || 0)),
     }));
+  };
+
+  const savePhotoToCloudinary = async (imageData: string) => {
+    const previousPhoto = form.photoUrl;
+    setPhotoUploading(true);
+    set("photoUrl", imageData);
+    try {
+      const cloudinaryUrl = await uploadStudentPhotoToCloudinary(imageData);
+      set("photoUrl", cloudinaryUrl);
+      toast.success("Student photo uploaded to Cloudinary");
+    } catch (error) {
+      console.error("Unable to upload student photo to Cloudinary:", error);
+      set("photoUrl", previousPhoto);
+      toast.error(error instanceof Error ? error.message : "Cloudinary photo upload failed");
+    } finally {
+      setPhotoUploading(false);
+    }
   };
 
   const stopCamera = () => {
@@ -1046,7 +1087,7 @@ export function StudentDialog({
       return;
     }
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    set("photoUrl", canvas.toDataURL("image/jpeg", 0.82));
+    void savePhotoToCloudinary(canvas.toDataURL("image/jpeg", 0.82));
     stopCamera();
     setCameraError("");
   };
@@ -1073,7 +1114,7 @@ export function StudentDialog({
       if (!context) throw new Error("Unable to process this image");
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       bitmap.close();
-      set("photoUrl", canvas.toDataURL("image/jpeg", 0.82));
+      await savePhotoToCloudinary(canvas.toDataURL("image/jpeg", 0.82));
       stopCamera();
       setCameraError("");
     } catch (error) {
@@ -1083,6 +1124,14 @@ export function StudentDialog({
   };
 
   const handleSave = async () => {
+    if (photoUploading) {
+      toast.error("Wait for the student photo upload to finish");
+      return;
+    }
+    if (form.photoUrl?.startsWith("data:image/")) {
+      toast.error("The student photo has not been uploaded to Cloudinary yet");
+      return;
+    }
     if (!form.fullName.trim()) {
       toast.error("Full name is required");
       return;
@@ -1302,19 +1351,20 @@ export function StudentDialog({
                     </button>
                   </>
                 ) : (
-                  <button type="button" onClick={() => void startCamera()} className="flex items-center justify-center gap-2 rounded-lg bg-brand px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand/90">
+                  <button type="button" onClick={() => void startCamera()} disabled={photoUploading} className="flex items-center justify-center gap-2 rounded-lg bg-brand px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand/90 disabled:cursor-wait disabled:opacity-60">
                     <Camera className="size-4" /> Use webcam
                   </button>
                 )}
-                <button type="button" onClick={() => uploadRef.current?.click()} className="flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50">
-                  <Upload className="size-4" /> Upload photo
-                </button>
-                {form.photoUrl && (
-                  <button type="button" onClick={() => set("photoUrl", "")} className="flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50">
-                    <Trash2 className="size-4" /> Remove photo
+                  <button type="button" onClick={() => uploadRef.current?.click()} disabled={photoUploading} className="flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm font-semibold hover:bg-stone-50 disabled:cursor-wait disabled:opacity-60">
+                    {photoUploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                    {photoUploading ? "Uploading to Cloudinary..." : "Upload photo"}
                   </button>
-                )}
-                <p className="text-xs leading-5 text-black/45">Images are resized before saving. Maximum upload size: 10 MB.</p>
+                  {form.photoUrl && (
+                    <button type="button" onClick={() => set("photoUrl", "")} disabled={photoUploading} className="flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-wait disabled:opacity-60">
+                      <Trash2 className="size-4" /> Remove photo
+                    </button>
+                  )}
+                  <p className="text-xs leading-5 text-black/45">Photos are uploaded to Cloudinary after capture or selection. Maximum upload size: 10 MB.</p>
               </div>
             </div>
             {cameraError && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{cameraError}</p>}
@@ -1375,9 +1425,9 @@ export function StudentDialog({
           <button
             onClick={handleSave}
             className="px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-semibold hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={saving}
+            disabled={saving || photoUploading}
           >
-            {saving ? "Saving..." : isEditing ? "Update Student" : step < steps.length - 1 ? "Continue" : "Add Student"}
+            {photoUploading ? "Uploading photo..." : saving ? "Saving..." : isEditing ? "Update Student" : step < steps.length - 1 ? "Continue" : "Add Student"}
           </button>
         </div>
       </div>
