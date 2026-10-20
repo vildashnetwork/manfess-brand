@@ -96,6 +96,12 @@ function teacherAssignedToPair(subject: Subject, teacher: Teacher, classId: stri
 // Term definitions for Cameroon school system
 const TERMS = [
   {
+    id: "1st seq",
+    label: "1st seq",
+    sequences: ["1st seq"],
+    displayColumns: ["1st"]
+  },
+  {
     id: "first",
     label: "First Term",
     sequences: ["1st seq", "2nd seq"],
