@@ -780,7 +780,8 @@ export function ReportCardsIndex() {
             <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.grade}</td>
             <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.remark}</td>
             <td style="padding:5px 6px;border:1px solid #000000;text-align:center;font-weight:bold;font-size:9.5px;">${sub.teacher || "—"}</td>
-          </tr>`;
+          </tr>                   
+          `;
       })
       .join("");
 
@@ -805,10 +806,12 @@ export function ReportCardsIndex() {
               Located at Belmon Bilingual High School, 200 meters from rail opposite Royal City, Bonaberi – Douala, Cameroon<br/>
               Tel. 682 55 35 03 / 652 049 492 / 677 517 606
             </div>-->
+              <!-- 
             <div style="font-size:8px;color:#000000;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;">
               AUT. Nº: GEN- 430/23/MINESEC/SG/DESG/SDSGEPESG/SSGEPES/27/SEPT/2023<br/>
               AUT. Nº: TECH - 035/24/MINESEC/SG/DESTP/SDSPETP/SSEPTP/07/FEB/2024
             </div>
+            -->
           </div>
           <div style="text-align:right;line-height:1.45;color:#15803D;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">
             Republic of Cameroon<br/>
@@ -817,7 +820,7 @@ export function ReportCardsIndex() {
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 16px;padding:9px 14px;background:#E8F5EC;border-left:5px solid #15803D;border-radius:0 6px 6px 0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 16px;padding:2px 5px;background:#E8F5EC;border-left:5px solid #15803D;border-radius:0 6px 6px 0;">
           <div style="font-size:16px;font-weight:800;color:#15803D;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(ctx.title)} Report</div>
           <div style="text-align:right;font-size:8px;font-weight:800;color:#52665a;letter-spacing:0.08em;">ACADEMIC YEAR<br/><span style="font-size:12px;color:#183328;letter-spacing:0;">${escapeHtml(ctx.academicYear)}</span></div>
         </div>
@@ -897,7 +900,7 @@ export function ReportCardsIndex() {
           </div>
         </div>
 
-          <div style="margin-bottom:14px;padding:10px 12px;border:1px solid #BFE0CA;border-radius:8px;background:#F2F9F4;">
+          <div style="margin-bottom:14px;padding:2px 5px;border:1px solid #BFE0CA;border-radius:8px;background:#F2F9F4;">
           <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#15803D;margin-bottom:7px;">Attendance · ${escapeHtml(ctx.title)}</div>
           <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:10px;">
             <div><b>Present</b><br/>${data.attendance?.present ?? 0} days</div>
@@ -932,7 +935,7 @@ export function ReportCardsIndex() {
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;text-align:center;font-size:11px;margin-bottom:18px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;text-align:center;font-size:11px;margin-bottom:28px;">
           <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Class Master</div></div>
           <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Principal</div></div>
           <div><div style="height:34px;border-bottom:1px dashed #000000;"></div><div style="margin-top:4px;font-weight:600;color:#000000;">Parent / Guardian</div></div>
